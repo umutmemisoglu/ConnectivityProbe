@@ -16,7 +16,7 @@ on:
 
 permissions:
   id-token: write   # nuget.org'a kimlik kanıtı (OIDC) için gerekli
-  contents: read
+  contents: write   # GitHub Release oluşturmak için
 
 jobs:
   publish:
@@ -61,3 +61,15 @@ jobs:
             echo "Pushing $p"
             dotnet nuget push "$p" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+
+      # GitHub Releases sayfasına sürüm notu: CHANGELOG.md'deki bu sürümün bölümü (İngilizce + Türkçe) ve paketin kendisi.
+      - name: GitHub Release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          tr -d '\r' < src/ConnectivityProbe/CHANGELOG.md | awk -v v="## $VERSION" '$0==v{f=1;next} /^## /{if(f)exit} f' > notes.md
+          printf '\nNuGet: https://www.nuget.org/packages/ConnectivityProbe/%s\n' "$VERSION" >> notes.md
+          gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg --title "ConnectivityProbe $VERSION" --notes-file notes.md --verify-tag

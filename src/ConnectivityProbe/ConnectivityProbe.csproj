@@ -31,10 +31,10 @@
     <RepositoryUrl>https://github.com/umutmemisoglu/ConnectivityProbe</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Title>ConnectivityProbe</Title>
-    <Description>Lets an application test, from inside each of its own pods/instances, whether it can reach other servers (telnet-style TCP check), and discover how many instances run behind a service. Exposes two endpoints: /connectivity-probe/discover and /connectivity-probe/identity. Works with ASP.NET Core 2.1-10 (zero-code via hosting startup), IIS / classic ASP.NET (zero-code IHttpModule), OWIN and non-web apps. Secure by default (access key or explicit opt-in).</Description>
+    <Description>Lets an application test, from inside each of its own pods/instances, whether it can reach other servers (telnet-style TCP check), and discover how many instances run behind a service. Exposes two endpoints: /connectivity-probe/discover and /connectivity-probe/identity. Strict mode (1.1.0+): with a Monitor URL and an app key, every instance pulls its checks from ConnectivityProbe Monitor, runs them locally and reports back, so the instance count is exact. Works with ASP.NET Core 2.1-10 (zero-code via hosting startup), IIS / classic ASP.NET (zero-code IHttpModule), OWIN and non-web apps. Secure by default (access key or explicit opt-in).</Description>
     <PackageTags>connectivity;telnet;tcp;health;diagnostics;kubernetes;pods;discovery;aspnetcore;iis;owin</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Bkz. CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/src/ConnectivityProbe/CHANGELOG.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Tüm public üyeler belgelenmiş değil; eksik XML yorumu uyarısı paketi engellemesin. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
