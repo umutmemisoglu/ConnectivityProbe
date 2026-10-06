@@ -1,14 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Hedefler (NuGet her uygulamaya uygun olanı kendisi seçer):
-      netstandard2.0 : ASP.NET Core 2.1 - 7 (middleware + otomatik aktivasyon), OWIN, kendi dinleyicisi
-      net462         : .NET Framework 4.6.2+ : IIS / klasik ASP.NET (otomatik IHttpModule), OWIN, Windows Service.
-                       Hiçbir NuGet bağımlılığı yoktur; bin klasörüne kopyalamak yeterlidir.
-      net8.0         : .NET 8+ (ASP.NET Core paylaşılan framework'ü ile)
+    Tek kod tabanı, hiçbir NuGet bağımlılığı yok (yalnızca .NET'in kendi HttpClient, Socket ve kriptografi parçaları).
+      netstandard2.0 : .NET Core 2.0+, .NET 5 - 10, Mono
+      net462         : .NET Framework 4.6.2+ (aynı kod; eski .NET Framework sürümlerinde netstandard uyumluluk DLL'leri gerekmesin diye)
   -->
   <PropertyGroup>
-    <TargetFrameworks>netstandard2.0;net462;net8.0</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0;net462</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>ConnectivityProbe</RootNamespace>
@@ -21,7 +19,7 @@
   -->
   <PropertyGroup>
     <PackageId>ConnectivityProbe</PackageId>
-    <Version>1.1.0</Version>
+    <Version>2.0.0</Version>
     <Authors>Fatih Umut Memişoğlu</Authors>
     <Copyright>Copyright (c) 2026 Fatih Umut Memişoğlu</Copyright>
     <!-- Açık kaynak lisansı (SPDX kimliği). Tam metin: depo kökündeki LICENSE dosyası. -->
@@ -31,8 +29,8 @@
     <RepositoryUrl>https://github.com/umutmemisoglu/ConnectivityProbe</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Title>ConnectivityProbe</Title>
-    <Description>Lets an application test, from inside each of its own pods/instances, whether it can reach other servers (telnet-style TCP check), and discover how many instances run behind a service. Exposes two endpoints: /connectivity-probe/discover and /connectivity-probe/identity. Strict mode (1.1.0+): with a Monitor URL and an app key, every instance pulls its checks from ConnectivityProbe Monitor, runs them locally and reports back, so the instance count is exact. Works with ASP.NET Core 2.1-10 (zero-code via hosting startup), IIS / classic ASP.NET (zero-code IHttpModule), OWIN and non-web apps. Secure by default (access key or explicit opt-in).</Description>
-    <PackageTags>connectivity;telnet;tcp;health;diagnostics;kubernetes;pods;discovery;aspnetcore;iis;owin</PackageTags>
+    <Description>Every pod / server of your application registers itself to ConnectivityProbe Monitor with an app key, pulls its connection list, tests every connection (TCP) from inside and reports back, together with the application version, build id and Kubernetes cluster. Exact pod counts and per-pod results. One line to start, no endpoints, no dependencies. Works on .NET Core 2.0+, .NET 5-10 and .NET Framework 4.6.2+ (ASP.NET Core, IIS, workers, console apps).</Description>
+    <PackageTags>connectivity;telnet;tcp;health;diagnostics;monitoring;kubernetes;pods;version</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/src/ConnectivityProbe/CHANGELOG.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -53,35 +51,9 @@
     <InternalsVisibleTo Include="ConnectivityProbe.Tests" />
   </ItemGroup>
 
-  <!--
-    ASP.NET Core 2.1 - 7: 2.1 soyutlamaları (en düşük ortak sürüm). 2.2.0 kullanılamaz: ASP.NET Core 2.1'in metapaketi bu
-    paketleri "< 2.2.0" ile sabitler ve sürüm çakışması (NU1107) verir. Daha yeni hostlarda kendi sürümleri otomatik kullanılır.
-  -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.1.1" />
-    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="2.1.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.1.1" />
-  </ItemGroup>
-
-  <!-- .NET Framework: yalnızca framework'ün kendi parçaları (System.Web, System.Configuration). -->
+  <!-- .NET Framework: HttpClient framework'ün kendi System.Net.Http'sinden gelir (NuGet paketi değil). -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
-    <Reference Include="System.Web" />
-    <Reference Include="System.Configuration" />
     <Reference Include="System.Net.Http" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <!-- ASP.NET Core adaptörü .NET Framework derlemesinde yer almaz (orada IIS modülü kullanılır). -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
-    <Compile Remove="AspNetCore\**" />
-  </ItemGroup>
-
-  <!-- IIS / System.Web adaptörü yalnızca .NET Framework derlemesinde vardır. -->
-  <ItemGroup Condition="'$(TargetFramework)' != 'net462'">
-    <Compile Remove="SystemWeb\**" />
   </ItemGroup>
 
 </Project>

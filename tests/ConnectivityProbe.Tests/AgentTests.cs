@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -8,14 +9,14 @@ using Xunit;
 
 namespace ConnectivityProbe.Tests;
 
-/// <summary>Strict modu test etmek için sahte Monitor: pod bildirimlerini toplar ve tanımları döner.</summary>
+/// <summary>Sahte Monitor: pod bildirimlerini toplar, bilinmeyen anahtarı "kaydeder" ve bağlantı listesini döner.</summary>
 internal sealed class FakeMonitor : IAsyncDisposable
 {
-    public const string Key = "cpk_test";
     private readonly WebApplication _app;
     public string Url { get; }
-    public ConcurrentQueue<AgentReport> Reports { get; } = new();
+    public ConcurrentQueue<(string Key, AgentReport Report)> Reports { get; } = new();
     public ConcurrentQueue<string> Goodbyes { get; } = new();
+    public ConcurrentDictionary<string, string> Registered { get; } = new();   // anahtar -> uygulama adı
     public string RunRequestId { get; set; } = "1";
     public object[] Connections { get; set; } = Array.Empty<object>();
 
@@ -36,14 +37,14 @@ internal sealed class FakeMonitor : IAsyncDisposable
 
         app.MapPost(ConnectivityProbeAgent.ReportPath, async (HttpContext ctx) =>
         {
-            if (ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader] != Key)
-                return Results.Json(new { error = "bad key" }, statusCode: 401);
-            var report = await JsonSerializer.DeserializeAsync<AgentReport>(ctx.Request.Body, json);
-            self!.Reports.Enqueue(report!);
+            var key = ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader].ToString();
+            var report = (await JsonSerializer.DeserializeAsync<AgentReport>(ctx.Request.Body, json))!;
+            self!.Reports.Enqueue((key, report));
+            self.Registered.TryAdd(key, report.AppName); // aynı anahtar varsa yeniden kaydedilmez
             return Results.Json(new
             {
-                appId = "a1", appName = "Test App", intervalSeconds = 3600, runRequestId = self.RunRequestId,
-                timeoutMs = 2000, attempts = 20, confidence = 0.9, connections = self.Connections
+                appId = "id-" + key, appName = self.Registered[key], intervalSeconds = 3600, runRequestId = self.RunRequestId,
+                timeoutMs = 2000, connections = self.Connections
             });
         });
         app.MapPost(ConnectivityProbeAgent.GoodbyePath, async (HttpContext ctx) =>
@@ -65,7 +66,7 @@ internal sealed class FakeMonitor : IAsyncDisposable
     }
 }
 
-// Agent süreç başına tek olduğu için bu sınıftaki testler sırayla çalışır (xUnit aynı sınıftaki testleri paralel çalıştırmaz).
+// Agent süreç başına tek olduğu ve konsol çıktısı yakalandığı için bu sınıftaki testler sırayla çalışır.
 public class AgentTests
 {
     private static async Task<T> WaitFor<T>(Func<T?> probe, TimeSpan timeout) where T : class
@@ -79,113 +80,158 @@ public class AgentTests
         throw new TimeoutException("condition not met in " + timeout);
     }
 
-    [Fact]
-    public void Strict_settings_are_read_from_configuration()
+    private static async Task<(string Key, AgentReport Report)> WaitForReport(
+        FakeMonitor monitor, Func<(string Key, AgentReport Report), bool> match, TimeSpan timeout)
     {
-        var o = ConnectivityProbeOptions.FromSettings(new Dictionary<string, string?>
+        var until = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < until)
         {
-            ["MonitorUrl"] = "https://monitor.example.com/", ["AppKey"] = " cpk_x ",
-            ["Strict:IntervalSeconds"] = "45", ["Strict:CommandPollSeconds"] = "7"
-        });
-        Assert.Equal("https://monitor.example.com", o.MonitorUrl);
-        Assert.Equal("cpk_x", o.AppKey);
-        Assert.Equal(45, o.StrictIntervalSeconds);
-        Assert.Equal(7, o.StrictPollSeconds);
-        Assert.True(o.StrictEnabled);
-        Assert.False(new ConnectivityProbeOptions { MonitorUrl = "https://m" }.StrictEnabled);
-        Assert.Null(ConnectivityProbeAgent.Start(new ConnectivityProbeOptions())); // ayar yoksa başlamaz
+            foreach (var r in monitor.Reports)
+                if (match(r)) return r;
+            await Task.Delay(100);
+        }
+        throw new TimeoutException("no matching report in " + timeout);
+    }
+
+    // Konsola yazılanları yakalar (Monitor'e bağlanamama mesajları yalnızca konsola gider).
+    private sealed class ConsoleCapture : IDisposable
+    {
+        private readonly TextWriter _original = Console.Out;
+        private readonly StringWriter _writer = new();
+        public ConsoleCapture() => Console.SetOut(TextWriter.Synchronized(_writer));
+        public string Text => _writer.ToString();
+        public void Dispose() => Console.SetOut(_original);
+    }
+
+    [Theory]
+    [InlineData("", "key")]
+    [InlineData("http://monitor", "")]
+    [InlineData("   ", "   ")]
+    public void Missing_settings_disable_the_agent_without_throwing(string url, string key)
+    {
+        using var console = new ConsoleCapture();
+        Assert.Null(ConnectivityProbeAgent.Start(url, key));
+        Assert.Contains("[ConnectivityProbe] MonitorUrl and AppKey are required", console.Text);
     }
 
     [Fact]
-    public async Task Agent_pulls_definitions_tests_them_reports_results_and_says_goodbye()
+    public void Invalid_monitor_url_disables_the_agent_without_throwing()
     {
-        await using var target = await TestApp.StartAsync(o => o.AllowAnonymous = true);   // ConnectivityProbe kullanan hedef
+        using var console = new ConsoleCapture();
+        Assert.Null(ConnectivityProbeAgent.Start("monitor.local", "orders"));
+        Assert.Contains("Invalid MonitorUrl", console.Text);
+    }
+
+    [Fact]
+    public async Task Agent_registers_tests_connections_reports_versions_and_says_goodbye()
+    {
+        // Kubernetes cluster'ı taklit eden service account klasörü.
+        var sa = Directory.CreateTempSubdirectory().FullName;
+        File.WriteAllText(Path.Combine(sa, "ca.crt"), "-----BEGIN CERTIFICATE-----\nTEST-CLUSTER\n-----END CERTIFICATE-----\n");
+        File.WriteAllText(Path.Combine(sa, "namespace"), "orders-prod\n");
+        Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_SERVICEACCOUNT_DIR", sa);
+
+        var target = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        target.Start();
+        var targetPort = ((IPEndPoint)target.LocalEndpoint).Port;
+
         await using var monitor = await FakeMonitor.StartAsync();
         monitor.Connections = new object[]
         {
-            new { id = "tcp", name = "tcp", host = "127.0.0.1", port = target.Port, usesConnectivityProbe = false },
-            new { id = "cp", name = "cp", host = "127.0.0.1:" + target.Port, port = (int?)null, usesConnectivityProbe = true },
-            new { id = "bad", name = "bad", host = "", port = (int?)null, usesConnectivityProbe = false },
+            new { id = "db", name = "db", host = "127.0.0.1", port = targetPort },
+            new { id = "bad", name = "bad", host = "", port = (int?)null },
         };
 
-        var agent = ConnectivityProbeAgent.Start(new ConnectivityProbeOptions
-        {
-            MonitorUrl = monitor.Url, AppKey = FakeMonitor.Key, StrictPollSeconds = 1, AllowAnonymous = true
-        });
+        using var console = new ConsoleCapture();
+        var agent = ConnectivityProbeAgent.Start(monitor.Url, "orders-api", "Orders API", o => o.PollSeconds = 1);
         Assert.NotNull(agent);
         try
         {
-            // step 1: İlk bildirimden sonra hemen test yapılıp sonuçlar gönderilir.
-            var first = await WaitFor(() => monitor.Reports.FirstOrDefault(r => r.Run != null), TimeSpan.FromSeconds(20));
-            Assert.False(string.IsNullOrEmpty(first.Identity.InstanceId));
-            Assert.Equal(1, first.PollSeconds);
-            Assert.Equal(ProbeInfo.Version, first.Identity.ProbeVersion);
+            // step 1: İlk bildirim = kayıt; hemen ardından test sonuçları gelir.
+            var (key, report) = await WaitForReport(monitor, r => r.Report.Run != null, TimeSpan.FromSeconds(20));
+            Assert.Equal("orders-api", key);
+            Assert.Equal("Orders API", monitor.Registered["orders-api"]);
+            Assert.Equal("Orders API", report.AppName);
+            Assert.Equal(1, report.PollSeconds);
 
-            var results = first.Run!.Results.ToDictionary(r => r.ConnectionId);
-            Assert.Equal(ProbeTargetKind.Tcp, results["tcp"].Report!.TargetKind);
-            Assert.Equal(first.Identity.InstanceId, results["tcp"].Report!.ExecutedByInstanceId);
-            Assert.Equal(ProbeTargetKind.ConnectivityProbe, results["cp"].Report!.TargetKind);
-            Assert.Equal(1, results["cp"].Report!.DistinctInstances);
-            Assert.Null(results["bad"].Report);
+            // Uygulama sürümü: Start'ı çağıran proje (bu test projesi).
+            var asm = typeof(AgentTests).Assembly;
+            Assert.Equal(PodIdentityBuilder.PickVersion(
+                asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                    .Cast<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+                asm.GetName().Version), report.Pod.AppVersion);
+            Assert.Equal(PodIdentityBuilder.BuildIdOf(asm), report.Pod.BuildId);
+            Assert.Equal(PodIdentityBuilder.ReadClusterId(sa), report.Pod.ClusterId);
+            Assert.Equal("orders-prod", report.Pod.Namespace);
+
+            var results = report.Run!.Results.ToDictionary(r => r.ConnectionId);
+            Assert.True(results["db"].Tcp!.HostnameAttempts.Single().Success, results["db"].Tcp!.HostnameAttempts.Single().Error);
+            Assert.Null(results["bad"].Tcp);
             Assert.Contains("Invalid target", results["bad"].Error);
-            Assert.Equal("Test App", agent!.AppName);
+            Assert.Equal("id-orders-api", agent!.AppId);
+            Assert.Contains("[ConnectivityProbe] Registered to monitor", console.Text);
 
             // step 2: Aralık 1 saat olduğu halde "Şimdi test et" (runRequestId değişti) beklemeden yeni tur başlatır.
-            var runsBefore = monitor.Reports.Count(r => r.Run != null);
+            var runsBefore = monitor.Reports.Count(r => r.Report.Run != null);
             monitor.RunRequestId = "2";
-            await WaitFor(() => monitor.Reports.Count(r => r.Run != null) > runsBefore ? "ok" : null, TimeSpan.FromSeconds(20));
+            await WaitFor(() => monitor.Reports.Count(r => r.Report.Run != null) > runsBefore ? "ok" : null, TimeSpan.FromSeconds(20));
 
-            // step 3: Aralık dolmadıkça yalnızca canlılık bildirimi gönderilir (test sonucu yok).
+            // step 3: Aralık dolmadıkça yalnızca canlılık bildirimi gönderilir.
             var countAfterRun = monitor.Reports.Count;
             await WaitFor(() => monitor.Reports.Count > countAfterRun + 1 ? "ok" : null, TimeSpan.FromSeconds(10));
-            Assert.All(monitor.Reports.Skip(countAfterRun), r => Assert.Null(r.Run));
+            Assert.All(monitor.Reports.Skip(countAfterRun), r => Assert.Null(r.Report.Run));
         }
         finally
         {
             agent!.Stop();
+            target.Stop();
+            Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_SERVICEACCOUNT_DIR", null);
         }
 
-        // step 4: Kapanırken Monitor'e "kapanıyorum" bildirilir.
-        Assert.Contains(monitor.Reports.First().Identity.InstanceId, monitor.Goodbyes);
+        // step 4: Durdurulunca Monitor'e "kapanıyorum" bildirilir.
+        Assert.Contains(monitor.Reports.First().Report.Pod.InstanceId, monitor.Goodbyes);
         Assert.Null(ConnectivityProbeAgent.Current);
     }
 
     [Fact]
-    public async Task Agent_with_wrong_key_keeps_running_and_reports_the_error()
+    public async Task Unreachable_monitor_does_not_throw_and_writes_one_console_line()
     {
-        await using var monitor = await FakeMonitor.StartAsync();
-        var agent = ConnectivityProbeAgent.Start(new ConnectivityProbeOptions { MonitorUrl = monitor.Url, AppKey = "wrong", StrictPollSeconds = 1 });
+        // Boş bir port: Monitor yok.
+        var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+
+        using var console = new ConsoleCapture();
+        var agent = ConnectivityProbeAgent.Start("http://127.0.0.1:" + port, "orders-api", configure: o => o.PollSeconds = 1);
         try
         {
-            var error = await WaitFor(() => agent!.LastError, TimeSpan.FromSeconds(10));
-            Assert.Contains("401", error);
-            Assert.Empty(monitor.Reports);
+            await WaitFor(() => agent!.LastError, TimeSpan.FromSeconds(10));
+            await Task.Delay(2500); // birkaç deneme daha
+            var lines = console.Text.Split('\n').Count(x => x.Contains("Could not connect to monitor"));
+            Assert.Equal(1, lines);                     // tekrar eden hatalar konsolu boğmaz
             Assert.Null(agent!.LastContactUtc);
         }
         finally
         {
-            agent!.Stop();
+            agent!.Stop(); // Monitor'e hiç ulaşılmadıysa veda göndermeye çalışıp beklemez
         }
     }
 
     [Fact]
-    public async Task UseConnectivityProbe_starts_the_agent_with_the_application_and_stops_it_on_shutdown()
+    public async Task Same_key_from_many_pods_registers_once()
     {
         await using var monitor = await FakeMonitor.StartAsync();
-        var app = await TestApp.StartAsync(o =>
-        {
-            o.AllowAnonymous = true; o.MonitorUrl = monitor.Url; o.AppKey = FakeMonitor.Key; o.StrictPollSeconds = 1;
-        });
+        var agent = ConnectivityProbeAgent.Start(monitor.Url, "shared-key", "First Name", o => o.PollSeconds = 1);
         try
         {
-            await WaitFor(() => monitor.Reports.FirstOrDefault(), TimeSpan.FromSeconds(20));
-            Assert.NotNull(ConnectivityProbeAgent.Current);
+            await WaitFor(() => monitor.Reports.Count >= 2 ? "ok" : null, TimeSpan.FromSeconds(10));
+            Assert.Single(monitor.Registered);
+            Assert.Same(agent, ConnectivityProbeAgent.Start(monitor.Url, "shared-key", "Other")); // süreç başına tek agent
         }
         finally
         {
-            await app.DisposeAsync(); // uygulama kapanır -> ApplicationStopping -> agent durur ve "kapanıyorum" der
+            agent!.Stop();
         }
-        Assert.Single(monitor.Goodbyes);
-        Assert.Null(ConnectivityProbeAgent.Current);
     }
 }

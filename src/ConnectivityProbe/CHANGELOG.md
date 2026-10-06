@@ -1,5 +1,49 @@
 # Changelog / Değişiklik geçmişi
 
+## 2.0.0
+
+### English
+
+**One line, no endpoints.** Breaking release: every application now works the way 1.1's Strict mode did.
+
+- New single entry point: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Optional settings with a fourth
+  parameter (`PollSeconds`, `IntervalSeconds`, `TimeoutMs`, `MaxAddresses`, `MaxParallelTests`).
+- **Automatic registration:** the developer chooses the app key (e.g. `orders-api`). The first pod that reports with a
+  new key registers the application in the Monitor; pods with the same key are the same application. The same key can be
+  used in every environment, each with its own Monitor.
+- **Application version per pod:** the greater of `AssemblyInformationalVersion` and `AssemblyVersion` of the calling
+  assembly, plus a build id (MVID) and build date. No manual setting.
+- **Automatic cluster grouping:** fingerprint of the Kubernetes service-account CA certificate (and the namespace);
+  outside Kubernetes, the Monitor groups pods by source address.
+- **Never affects the application:** no exceptions; short English console messages on registration, on connection
+  errors (first, then at most every 5 minutes) and on reconnect.
+- Stops by itself on process exit / IIS app-domain unload and tells the Monitor the pod is leaving.
+- Targets `netstandard2.0` and `net462` with **no NuGet dependencies** (own JSON handling).
+- Agent protocol `v2` (`/api/agent/v2/report`, `/api/agent/v2/goodbye`); requires ConnectivityProbe Monitor 2.0.
+- **Removed:** `discover` / `identity` endpoints, `UseConnectivityProbe()`, hosting startup, IIS module, OWIN middleware,
+  `ConnectivityProbeListener`, Discover mode, `AccessKey`, `AllowAnonymous`, `AllowedTargets`, the `net8.0` target.
+
+### Türkçe
+
+**Tek satır, uç yok.** Kıran sürüm: artık her uygulama 1.1'in Strict modu gibi çalışır.
+
+- Tek giriş noktası: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. İsteğe bağlı ayarlar dördüncü
+  parametreyle (`PollSeconds`, `IntervalSeconds`, `TimeoutMs`, `MaxAddresses`, `MaxParallelTests`).
+- **Kendiliğinden kayıt:** uygulama anahtarını geliştirici belirler (ör. `orders-api`). Yeni bir anahtarla bildirim
+  gönderen ilk pod uygulamayı Monitor'e kaydeder; aynı anahtarlı pod'lar aynı uygulamadır. Aynı anahtar her ortamda, her
+  biri kendi Monitor'üyle kullanılabilir.
+- **Pod başına uygulama sürümü:** çağıran assembly'nin `AssemblyInformationalVersion` ve `AssemblyVersion` değerlerinden
+  büyük olanı; ayrıca build kimliği (MVID) ve build tarihi. Elle ayar gerekmez.
+- **Otomatik cluster gruplama:** Kubernetes service account CA sertifikasının parmak izi (ve namespace); Kubernetes
+  dışında Monitor pod'ları kaynak adrese göre gruplar.
+- **Uygulamayı asla etkilemez:** hata fırlatmaz; kayıtta, bağlantı hatalarında (ilk seferde, sonra en fazla 5 dakikada
+  bir) ve yeniden bağlanınca konsola kısa İngilizce mesajlar yazar.
+- Süreç kapanırken / IIS app domain'i kaldırılırken kendiliğinden durur ve Monitor'e pod'un ayrıldığını bildirir.
+- Hedefler `netstandard2.0` ve `net462`, **hiçbir NuGet bağımlılığı yok** (kendi JSON işleme kodu).
+- Agent protokolü `v2` (`/api/agent/v2/report`, `/api/agent/v2/goodbye`); ConnectivityProbe Monitor 2.0 gerekir.
+- **Kaldırılanlar:** `discover` / `identity` uçları, `UseConnectivityProbe()`, hosting startup, IIS modülü, OWIN
+  middleware, `ConnectivityProbeListener`, Discover modu, `AccessKey`, `AllowAnonymous`, `AllowedTargets`, `net8.0` hedefi.
+
 ## 1.1.0
 
 ### English
