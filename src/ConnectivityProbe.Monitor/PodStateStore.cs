@@ -7,12 +7,12 @@ public sealed class PersistedAppPods
 {
     /// <summary>Bilinen pod'lar (eksik olanlar dahil).</summary>
     public List<PodStatus> Known { get; set; } = new();
-    /// <summary>Pod -> üst üste kaç tur görünmedi.</summary>
+    /// <summary>Pod -> kaç test aralığıdır bildirim göndermiyor.</summary>
     public Dictionary<string, int> Missed { get; set; } = new();
-    /// <summary>Bilinen pod'ların hepsinin görüldüğü son turdaki pod sayısı.</summary>
+    /// <summary>Pod -> bildirim sıklığı (sn).</summary>
+    public Dictionary<string, int> PollSeconds { get; set; } = new();
+    /// <summary>Bilinen pod'ların hepsinin canlı olduğu son andaki pod sayısı.</summary>
     public int ExpectedPods { get; set; }
-    /// <summary>Bağlantı -> o bağlantının hedefinde görülen pod'lar (ConnectivityProbe kullanan hedefler için).</summary>
-    public Dictionary<string, TargetMemory> Targets { get; set; } = new();
 }
 
 /// <summary>
@@ -43,7 +43,7 @@ public sealed class PodStateStore
         }
         catch (Exception ex)
         {
-            // Bozuk dosya Monitor'ün açılmasını engellemesin; pod'lar yeniden keşfedilir.
+            // Bozuk dosya Monitor'ün açılmasını engellemesin; pod'lar bir sonraki bildirimde yeniden görülür.
             _log.LogWarning(ex, "Pod state file could not be read: {Path}", _path);
             return new();
         }

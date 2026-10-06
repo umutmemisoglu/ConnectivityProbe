@@ -5,77 +5,79 @@
 [![NuGet](https://img.shields.io/nuget/v/ConnectivityProbe.svg)](https://www.nuget.org/packages/ConnectivityProbe)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-ConnectivityProbe, dışarıdan cevaplanması zor iki soruyu cevaplar:
+ConnectivityProbe, dışarıdan cevaplanması zor soruları cevaplar:
 
 1. **Uygulamam X'e _kendi pod'larının / sunucularının her birinin içinden_ erişebiliyor mu?**
    Örneğin `orders-api`'nin her pod'u `sql01:1433`'e, Redis'e ve ödeme API'sine TCP bağlantısı açabiliyor mu?
-2. **Bir servisin arkasında gerçekte kaç instance (pod) çalışıyor ve hangisi bozuk?**
+2. **Gerçekte kaç pod çalışıyor, hangi cluster'da ve her biri hangi sürümü / build'i çalıştırıyor?**
 
-Uygulamanıza eklediğiniz küçük bir .NET kütüphanesidir. Bu depodaki merkezi web uygulaması **ConnectivityProbe Monitor**, onu
-kullanarak yüzlerce uygulamayı tek ekranda izler.
+Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesidir. Her pod, bu depodaki merkezi web uygulaması
+**ConnectivityProbe Monitor**'e kendini bildirir; Monitor yüzlerce uygulamayı tek ekranda gösterir.
 
 | Proje | Nedir |
 |---|---|
-| [`src/ConnectivityProbe`](src/ConnectivityProbe) | Kütüphane; NuGet'te [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe) olarak yayınlanır. Hedefler: `net462`, `netstandard2.0`, `net8.0`. |
-| [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Merkezi izleme uygulaması (ASP.NET Core web uygulaması). Uygulamaları ve bağlantıları kaydeder; pod'ları ve sonuçları gösterir. NuGet paketi **değildir**. |
-| [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Kütüphaneyi tek satır kod yazmadan devreye alan örnek ASP.NET Core uygulaması. |
-| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Birim ve uçtan uca testler (gerçek Kestrel sunucularıyla): `dotnet test tests/ConnectivityProbe.Tests` |
+| [`src/ConnectivityProbe`](src/ConnectivityProbe) | Kütüphane; NuGet'te [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe) olarak yayınlanır. Hedefler: `netstandard2.0` ve `net462`, **bağımlılığı yoktur**. |
+| [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Merkezi izleme uygulaması (ASP.NET Core web uygulaması). Pod'ları, sürümleri, cluster'ları ve sonuçları gösterir; bağlantı tanımlarını tutar. NuGet paketi **değildir**. |
+| [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Örnek ASP.NET Core uygulaması. |
+| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Birim ve uçtan uca testler: `dotnet test tests/ConnectivityProbe.Tests` |
 
 ---
 
 ## İçindekiler
 
-- [İki mod: Discover ve Strict](#i̇ki-mod-discover-ve-strict)
+- [Nasıl çalışır](#nasıl-çalışır)
 - [Desteklenen platformlar](#desteklenen-platformlar)
 - [Platforma göre kurulum](#platforma-göre-kurulum)
-- [Strict mod ayrıntıları](#strict-mod-ayrıntıları)
-- [Discover mod ayrıntıları](#discover-mod-ayrıntıları)
-- [Ayarlar](#ayarlar)
-- [Uçlar](#uçlar)
+- [Uygulama anahtarı](#uygulama-anahtarı)
+- [Sürümler ve build'ler](#sürümler-ve-buildler)
+- [Cluster'lar](#clusterlar)
+- [Konsol mesajları](#konsol-mesajları)
+- [Seçenekler](#seçenekler)
 - [Güvenlik](#güvenlik)
 - [ConnectivityProbe Monitor](#connectivityprobe-monitor)
-- [Sürümler](#sürümler)
+- [1.x'ten geçiş](#1xten-geçiş)
+- [Sürüm geçmişi](#sürüm-geçmişi)
 
 ---
 
-## İki mod: Discover ve Strict
+## Nasıl çalışır
 
-Her uygulama Monitor'de iki moddan biriyle tanımlanır.
+```
+uygulama açılır ──►  ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)
 
-| | **Discover** | **Strict** (1.1.0+) |
-|---|---|---|
-| Testi kim başlatır | Monitor uygulamanın adresini çağırır. | Her pod Monitor'e kendisi başvurur. |
-| Test nasıl yapılır | İstek load balancer üzerinden bir pod'a düşer; o pod hedefi kendi içinden test edip cevap verir. Monitor bunu tüm pod'ları görene kadar tekrarlar. | Her pod, bağlantı listesini Monitor'den alır (**uygulama anahtarıyla** tanınır), her bağlantıyı kendi içinden test eder ve sonucu gönderir. |
-| Pod sayısı | **Tahmini**: istekler rastgele dağıldığı için sonuç bir güven oranıyla verilir (ör. %95). | **Kesin**: her pod kendini bildirir. |
-| Pod başına sonuç | Olasılıksal: load balancer'ın hiç seçmediği pod son bilinen sonucuyla gösterilir. | Her pod, her turda. |
-| Ağ yönü | Monitor → uygulama | Uygulama (pod) → Monitor |
-| Uygulamada gerekenler | Paket + uçların açık olması (`AccessKey` veya `AllowAnonymous`) | Paket (1.1.0+) + `MonitorUrl` + `AppKey` |
-| Uygulama adresi | Zorunlu | İsteğe bağlı. Verilirse Monitor dışarıdan erişimi de kontrol eder. |
-| HTTP'si olmayan uygulamalar (kuyruk tüketicileri, worker'lar) | Hayır | **Evet** |
-| Deploy / scale-down | Yerine yenisi gelen pod birkaç tur sonra sessizce düşer. | Düzgün kapanan pod "kapanıyorum" der ve alarm vermeden hemen çıkar. |
-| "Şimdi test et" düğmesi | Hemen | `Strict:CommandPollSeconds` içinde (varsayılan 10 sn) |
+her 10 sn     ──►  POST {MonitorUrl}/api/agent/v2/report     (başlık X-ConnectivityProbe-AppKey)
+                   "<anahtar> uygulamasının X pod'uyum, sürüm 1.4.0, cluster C"
+                   ◄── bağlantı listesi + test aralığı
+her 30 sn     ──►  her bağlantıyı bu pod'un içinden test et (TCP)
+                   └─► sonuçlar hemen bir sonraki bildirimle gider
+kapanırken    ──►  POST {MonitorUrl}/api/agent/v2/goodbye    → pod alarm üretmeden listeden çıkar
+```
 
-**Hangisini seçmeliyim?**
-- Kesin pod sayısı ve pod başına kesin sonuç istiyorsanız, uygulama HTTP'si olmayan bir worker ise ya da Monitor
-  uygulamaya erişemiyor ama uygulama Monitor'e erişebiliyorsa **Strict**.
-- Uygulamanın yapılandırmasını değiştiremiyorsanız ya da uygulama Monitor'e erişemiyorsa **Discover**.
-- İkisi birlikte kullanılabilir: Strict modda `discover` ve `identity` uçları çalışmaya devam eder; diğer uygulamalar bu
-  uygulamanın pod'larını yine keşfedebilir.
+- **Kayıt adımı yoktur.** Yeni bir anahtarla bildirim gönderen ilk pod, uygulamayı Monitor'e kendiliğinden kaydeder. Aynı
+  anahtarı kullanan pod'lar aynı uygulamadır; uygulama ikinci kez kaydedilmez.
+- **Uygulamanızda uç yoktur.** Kütüphane port açmaz, HTTP pipeline'ınıza bir şey eklemez. Pod'un yalnızca Monitor'e dışarı
+  doğru HTTP(S) erişimi olması yeterlidir. HTTP'si olmayan uygulamalar (worker'lar, kuyruk tüketicileri, Windows
+  servisleri) de aynı şekilde çalışır.
+- **Pod sayısı kesindir.** Her pod kendini bildirdiği için Monitor kaç pod çalıştığını ve her birinin ne gördüğünü bilir.
+- **Uygulamanız hiçbir zaman etkilenmez.** Monitor'e ulaşılamazsa veya ayarlar yanlışsa kütüphane konsola kısa bir
+  İngilizce mesaj yazar ve arka planda denemeye devam eder. Hiçbir zaman hata fırlatmaz.
+- **Bağlantılar Monitor'de tanımlanır**, uygulamada değil: Monitor'de `sql01:1433`'ü `orders-api`'ye bağlayın;
+  `orders-api`'nin her pod'u bir sonraki bildirimde onu test etmeye başlar.
+- Monitor'deki "**Şimdi test et**" her pod'a bir sonraki bildirimde (10 sn içinde) ulaşır ve pod'lar hemen test eder.
+- Bir pod'da aynı anda en fazla 4 bağlantı test edilir; hedeflere ani bağlantı yükü binmez.
 
 ---
 
 ## Desteklenen platformlar
 
-| Uygulama türü | Paketteki hedef | Discover uçları | Strict mod (1.1.0+) |
-|---|---|---|---|
-| ASP.NET Core **.NET 8 / 9 / 10** | `net8.0` | `app.UseConnectivityProbe()` veya kodsuz (ortam değişkeni) | Uygulamayla birlikte kendiliğinden başlar ve durur |
-| ASP.NET Core **2.1 – 7** (.NET Core 2.1, 3.1, .NET 5, 6, 7) | `netstandard2.0` | Yukarıdakiyle aynı | Yukarıdakiyle aynı |
-| **IIS'te klasik ASP.NET** (MVC 5, Web API 2, WebForms, WCF) – .NET Framework **4.6.2+** | `net462` | **Kodsuz**: `bin`'deki DLL kendini kaydeder | Uygulamayla birlikte kendiliğinden başlar |
-| **OWIN self-host** (Katana, Web API 2 self-host) | `net462` / `netstandard2.0` | `app.Use(typeof(ConnectivityProbeOwinMiddleware))` | Middleware ile başlar; kapanırken `Stop()` çağırın |
-| **Web sunucusu olmayan**: Worker Service, konsol, Windows Service | hepsi | `ConnectivityProbeListener.Start()` (kendi küçük HTTP dinleyicisi) | `ConnectivityProbeAgent.Start()` / `Stop()` |
+| Uygulama türü | Paketten kullanılan hedef |
+|---|---|
+| ASP.NET Core / .NET **Core 2.0 – .NET 10** (web API, MVC, Razor, gRPC, Worker Service, konsol) | `netstandard2.0` |
+| **.NET Framework 4.6.2+** (IIS'te klasik ASP.NET: MVC 5, Web API 2, WebForms, WCF; Windows servisleri; konsol) | `net462` |
+| Mono, Xamarin, Unity ve .NET Standard 2.0'ı destekleyen diğer her şey | `netstandard2.0` |
 
-NuGet doğru hedefi kendisi seçer. .NET Framework hedefinin **hiç NuGet bağımlılığı yoktur**; binding redirect gerekmez.
-.NET Framework 4.6.1 ve öncesi desteklenmez.
+Kütüphanenin **hiçbir NuGet bağımlılığı yoktur** (`System.Text.Json` bile); sürüm çakışması yaratmaz, binding redirect
+gerektirmez. .NET Framework 4.6.1 ve öncesi desteklenmez.
 
 ---
 
@@ -85,189 +87,123 @@ NuGet doğru hedefi kendisi seçer. .NET Framework hedefinin **hiç NuGet bağı
 dotnet add package ConnectivityProbe
 ```
 
-Tüm ayarlar yapılandırmadan `ConnectivityProbe` ön ekiyle okunur:
+Her yerde aynı tek çağrı, uygulama açılırken bir kez yapılır:
 
-| Kaynak | Örnek |
-|---|---|
-| `appsettings.json` (ASP.NET Core) | `"ConnectivityProbe": { "MonitorUrl": "https://monitor.example.com" }` |
-| Ortam değişkeni (tüm platformlar) | `ConnectivityProbe__MonitorUrl=https://monitor.example.com` |
-| `web.config` / `app.config` `<appSettings>` (.NET Framework) | `<add key="ConnectivityProbe:MonitorUrl" value="https://monitor.example.com" />` |
-| Kod | `options.MonitorUrl = "https://monitor.example.com";` |
+```csharp
+ConnectivityProbe.ConnectivityProbeAgent.Start(
+    monitorUrl: "https://monitor.example.com",   // bu ortamın (test / prod) Monitor'ü
+    appKey:     "orders-api",                    // siz belirlersiniz; bkz. "Uygulama anahtarı"
+    appName:    "Orders API");                   // isteğe bağlı: Monitor'de görünen ad
+```
 
-Aşağıdaki örnekler hem uçları (Discover modu için) hem Strict modu açar. Yalnızca Discover modu gerekiyorsa
-`MonitorUrl` / `AppKey`'i vermeyin.
+Değerlerin nereden geleceği size kalmış (sabit, `appsettings.json`, ortam değişkeni, `web.config`). Aşağıdaki örnekler
+değerleri yapılandırmadan okur; böylece her ortam kendi Monitor'üne bağlanır.
 
-### ASP.NET Core 6, 7, 8, 9, 10 (minimal hosting, `Program.cs`)
+### ASP.NET Core 6 – 10 (`Program.cs`)
 
 ```csharp
 using ConnectivityProbe;
 
 var builder = WebApplication.CreateBuilder(args);
+
+ConnectivityProbeAgent.Start(
+    builder.Configuration["ConnectivityProbe:MonitorUrl"] ?? "",
+    builder.Configuration["ConnectivityProbe:AppKey"] ?? "",
+    "Orders API");
+
 // ... servisleriniz
 var app = builder.Build();
-
-// Erken ekleyin: UseHttpsRedirection'dan ve kendi kimlik doğrulamanızdan önce.
-// Uçlar kendi erişim anahtarıyla (veya AllowAnonymous ile) korunur.
-app.UseConnectivityProbe(options =>
-{
-    options.Info["app"] = "orders-api";            // isteğe bağlı: identity yanıtında ve Monitor'de görünür
-});
-
-app.UseHttpsRedirection();
-// ... pipeline'ın geri kalanı
+// ... pipeline'ınız (buraya bir şey eklenmez)
 app.Run();
 ```
 
-`appsettings.json` (veya karşılık gelen ortam değişkenleri):
-
 ```json
 "ConnectivityProbe": {
-  "AccessKey": "",
   "MonitorUrl": "https://monitor.example.com",
-  "AppKey": ""
+  "AppKey": "orders-api"
 }
 ```
 
-`AccessKey` ve `AppKey`'i `appsettings.json`'a değil, secret / ortam değişkeni olarak verin:
-`ConnectivityProbe__AccessKey`, `ConnectivityProbe__AppKey`.
+Ya da ortam değişkenleriyle: `ConnectivityProbe__MonitorUrl`, `ConnectivityProbe__AppKey`.
 
-### ASP.NET Core 2.1 – 5 (`Startup.cs`)
+### ASP.NET Core 2.x – 5 (`Startup.cs` / `Program.cs`)
 
 ```csharp
-using ConnectivityProbe;
-
-public void Configure(IApplicationBuilder app, IHostingEnvironment env)   // 3.0+ için IWebHostEnvironment
+public Startup(IConfiguration configuration)
 {
-    app.UseConnectivityProbe();      // Configure'un ilk satırı; ayarlar yapılandırmadan okunur
-    // ... app.UseMvc(), app.UseRouting(), ...
+    Configuration = configuration;
+    ConnectivityProbeAgent.Start(configuration["ConnectivityProbe:MonitorUrl"] ?? "",
+                                 configuration["ConnectivityProbe:AppKey"] ?? "",
+                                 "Orders API");
 }
 ```
 
-### Kod değiştirmeden ASP.NET Core (2.1 – 10 tüm sürümler)
+### Worker Service (.NET Generic Host)
 
-ASP.NET Core'un resmi "hosting startup" mekanizması, referans verilen bir kütüphaneyi ortam değişkeniyle devreye alır.
-Yalnızca paketi ekler ve deployment ayarlarını değiştirirsiniz:
-
-```yaml
-env:
-  - name: ASPNETCORE_HOSTINGSTARTUPASSEMBLIES
-    value: ConnectivityProbe                 # başka hosting startup'lar varsa: "Diger.Assembly;ConnectivityProbe"
-  - name: ConnectivityProbe__MonitorUrl
-    value: https://monitor.example.com
-  - name: ConnectivityProbe__AppKey
-    valueFrom: { secretKeyRef: { name: connectivity-probe, key: app-key } }
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+ConnectivityProbeAgent.Start(builder.Configuration["ConnectivityProbe:MonitorUrl"] ?? "",
+                             builder.Configuration["ConnectivityProbe:AppKey"] ?? "",
+                             "Orders Worker");
+builder.Services.AddHostedService<Worker>();
+builder.Build().Run();
 ```
 
-IIS'te `web.config` → `<aspNetCore><environmentVariables>`, Docker'da `ENV`, yerelde `launchSettings.json` kullanılır. Ayrıca
-`app.UseConnectivityProbe()` de çağırırsanız ikinci kez eklenmez.
+### Konsol uygulaması
 
-### IIS'te klasik ASP.NET (.NET Framework 4.6.2+)
+```csharp
+ConnectivityProbeAgent.Start(Environment.GetEnvironmentVariable("ConnectivityProbe__MonitorUrl") ?? "",
+                             Environment.GetEnvironmentVariable("ConnectivityProbe__AppKey") ?? "",
+                             "Orders Importer");
+```
 
-Paketi ekleyin (veya `ConnectivityProbe.dll`'i `bin`'e kopyalayın). Başka bir şey gerekmez: modül uygulama başlarken kendini
-kaydeder. Ayarlar `web.config`'e girer:
+### IIS'te klasik ASP.NET (.NET Framework 4.6.2+, `Global.asax.cs`)
+
+```csharp
+using System.Configuration;
+using ConnectivityProbe;
+
+protected void Application_Start()
+{
+    ConnectivityProbeAgent.Start(ConfigurationManager.AppSettings["ConnectivityProbe:MonitorUrl"] ?? "",
+                                 ConfigurationManager.AppSettings["ConnectivityProbe:AppKey"] ?? "",
+                                 "Orders Web");
+    // ... AreaRegistration, RouteConfig, ...
+}
+```
 
 ```xml
 <appSettings>
-  <add key="ConnectivityProbe:AccessKey" value="..." />
   <add key="ConnectivityProbe:MonitorUrl" value="https://monitor.example.com" />
-  <add key="ConnectivityProbe:AppKey" value="cpk_..." />
-  <add key="ConnectivityProbe:Info:app" value="orders-web" />
+  <add key="ConnectivityProbe:AppKey" value="orders-web" />
 </appSettings>
 ```
 
-- **IIS'te Strict mod:** IIS, istek gelmeyen uygulama havuzunu varsayılan olarak 20 dakika sonra durdurur; arka plan işi de
-  onunla durur. Uygulama havuzunda `Start Mode = AlwaysRunning` ve `Idle Time-out = 0`, sitede `Preload Enabled = true`
-  ayarlayın. Aksi halde havuz uykudayken pod "eksik" görünür.
-- **Classic pipeline modu:** otomatik kayıt Integrated pipeline ister. Classic modda
-  `<system.web><httpModules><add name="ConnectivityProbe" type="ConnectivityProbe.ConnectivityProbeModule, ConnectivityProbe" /></httpModules></system.web>`
-  ekleyin ve `ConnectivityProbe:AutoRegister=false` verin.
-- **.NET Framework 4.6.2 – 4.7 ve HTTPS:** TLS 1.2 açık olmalıdır (`httpRuntime targetFramework="4.7"` veya üstü ya da
-  `ServicePointManager.SecurityProtocol`).
+- IIS boşta kalan uygulama havuzunu varsayılan olarak 20 dakika sonra durdurur; bildirimler de onunla durur ve Monitor
+  pod'u eksik gösterir. Havuzu `Start Mode = AlwaysRunning`, `Idle Time-out = 0`, siteyi `Preload Enabled = true` yapın.
+- .NET Framework'te kütüphane HTTPS Monitor adresleri için TLS 1.2'yi kendisi açar.
 
-### OWIN self-host
+### Windows Servisi (.NET Framework)
 
-```csharp
-using ConnectivityProbe;
+`Start`'ı `OnStart` içinde çağırın. `OnStop` içinde `ConnectivityProbeAgent.Current?.Stop();` çağrılabilir; zorunlu
+değildir, çünkü kütüphane süreç kapanırken de veda eder.
 
-public void Configuration(IAppBuilder app)
-{
-    app.Use(typeof(ConnectivityProbeOwinMiddleware));   // ayarlar app.config / ortam değişkenlerinden
-    // ...
-}
+### Durdurma
 
-// Kapanırken (OWIN'de standart bir kapanış olayı yoktur), Monitor'e "kapanıyorum" gitsin diye:
-ConnectivityProbeAgent.Current?.Stop();
-```
+Agent süreç kapanırken (`ProcessExit`) veya IIS uygulama domain'i kaldırılırken (`DomainUnload`) kendiliğinden durur ve
+Monitor'e pod'un ayrıldığını bildirir. `ConnectivityProbeAgent.Current?.Stop()` yalnızca daha erken durdurmak isterseniz
+gerekir.
 
-### Worker Service, konsol, Windows Service (web sunucusu yok)
+### Kubernetes: önerilen pod bilgileri
 
-**Strict mod** (worker'lar için önerilir): uygulamanın yalnızca Monitor'e erişebilmesi yeterlidir.
-
-```csharp
-using ConnectivityProbe;
-
-// .NET Generic Host (Worker Service): host ile birlikte başlat ve durdur
-builder.Services.AddHostedService<ConnectivityProbeAgentService>();
-
-sealed class ConnectivityProbeAgentService : IHostedService
-{
-    private readonly IConfiguration _config;
-    private ConnectivityProbeAgent? _agent;
-
-    public ConnectivityProbeAgentService(IConfiguration config) => _config = config;
-
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        _agent = ConnectivityProbeAgent.Start(new ConnectivityProbeOptions
-        {
-            MonitorUrl = _config["ConnectivityProbe:MonitorUrl"],
-            AppKey = _config["ConnectivityProbe:AppKey"],
-        });
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _agent?.Stop();          // Monitor'e "kapanıyorum" bildirir
-        return Task.CompletedTask;
-    }
-}
-```
-
-Host yoksa ayarlar ortam değişkenlerinden (.NET Framework'te ayrıca `app.config`'ten) okunur:
-
-```csharp
-var agent = ConnectivityProbeAgent.Start();   // MonitorUrl / AppKey yoksa null döner
-// ... uygulama çalışır
-agent?.Stop();
-```
-
-Web sunucusu olmadan **Discover uçları**: `ConnectivityProbeListener` küçük bir HTTP dinleyicisi açar (varsayılan
-`http://+:8099/`). Strict ayarları verilmişse agent'ı da başlatır.
-
-```csharp
-var probe = ConnectivityProbeListener.Start();
-// ...
-probe?.Dispose();
-```
-
-Windows'ta `http://+:port/` dinlemek yönetici yetkisi ister. Bir kez
-`netsh http add urlacl url=http://+:8099/ user="NT AUTHORITY\NETWORK SERVICE"` çalıştırın veya
-`ConnectivityProbe:ListenerPrefixes=http://localhost:8099/` kullanın.
-
-### Kubernetes: tam örnek
+Kütüphane başka bir şey olmadan çalışır. Downward API ile Monitor pod ve node adlarını da gösterir:
 
 ```yaml
 env:
-  # Strict mod
   - name: ConnectivityProbe__MonitorUrl
     value: https://monitor.example.com
   - name: ConnectivityProbe__AppKey
-    valueFrom: { secretKeyRef: { name: connectivity-probe, key: app-key } }
-  # Discover uçları (ortak anahtar; iç servislerde ConnectivityProbe__AllowAnonymous=true da olur)
-  - name: ConnectivityProbe__AccessKey
-    valueFrom: { secretKeyRef: { name: connectivity-probe, key: access-key } }
-  # Pod bilgisi (Downward API): Monitor'de pod adları ve hostNetwork pod'larının ayrı kimlik alması için
+    value: orders-api
   - name: POD_NAME
     valueFrom: { fieldRef: { fieldPath: metadata.name } }
   - name: POD_NAMESPACE
@@ -278,157 +214,96 @@ env:
 
 ---
 
-## Strict mod ayrıntıları
+## Uygulama anahtarı
 
-### Kurulum
+- Kütüphaneyi eklerken **siz belirlersiniz**, örneğin `orders-api`. İzin verilen: 1–200 görünür ASCII karakter.
+- Yeni bir anahtarla bildirim gönderen ilk pod uygulamayı kaydeder. Aynı anahtarı kullanan tüm pod'lar aynı uygulamadır.
+- **Aynı anahtar her ortamda kullanılabilir.** Test ve prod'un kendi Monitor'ü (`MonitorUrl`) vardır; test pod'ları test
+  Monitor'ünde test bağlantılarıyla, prod pod'ları prod Monitor'ünde görünür.
+- Monitor'de uygulamanın adını değiştirebilir ve onu bir ekibe taşıyabilirsiniz; anahtar değiştirilemez. Pod'ları hâlâ
+  çalışan bir uygulamayı silerseniz, bir sonraki bildirimde yeniden kaydolur.
 
-1. Monitor'de (Tanımlar sekmesi) uygulamayı **Mod = Strict** ile ekleyin. Bir **uygulama anahtarı** (`cpk_...`) üretilir.
-   Anahtar uygulama kartında görünür; yanında *Kopyala*, *Yenile* düğmeleri ve kopyalanmaya hazır bir *Kurulum bilgisi*
-   bölümü vardır.
-2. Uygulamanın test edeceği bağlantıları atayın (bağlantı havuzundan sürükleyip bırakın).
-3. Uygulamaya iki ayar verin, `ConnectivityProbe:MonitorUrl` ve `ConnectivityProbe:AppKey` (yukarıdaki platform örneklerine
-   bakın), ve deploy edin.
-4. Yaklaşık 10 saniye içinde her pod Monitor'de görünür; pod sayısı kesindir ve her pod'un sonuçları ayrı ayrı gelir.
+---
 
-### Her pod'da ne olur
+## Sürümler ve build'ler
 
-```
-10 sn'de bir ──►  POST {MonitorUrl}/api/agent/v1/report   (başlık X-ConnectivityProbe-AppKey)
-                   "Ben X pod'uyum, yaşıyorum"  ◄── bağlantı listesi + test aralığı
-30 sn'de bir ──►  her bağlantıyı bu pod'un içinden test et (TCP; hedef ConnectivityProbe kullanıyorsa pod keşfi)
-                   └─► sonuçlar hemen bir sonraki bildirimle gider
-kapanırken   ──►  POST {MonitorUrl}/api/agent/v1/goodbye   → pod alarm vermeden listeden çıkar
-```
+Her pod, ConnectivityProbe'un değil **sizin uygulamanızın** sürümünü bildirir. Hiçbir ayar gerekmez:
 
-- Testler `discover` ucuyla birebir aynı mantıkla yapılır; sonuçlar iki modda aynı anlamı taşır.
-- Monitor'deki **"Şimdi test et"**, her pod'a bir sonraki bildiriminde (varsayılan en geç 10 sn) ulaşır; pod'lar hemen test
-  eder.
-- Pod Monitor'e ulaşamazsa (yanlış adres, firewall, yanlış anahtar) uygulama loguna uyarı yazılır (`ConnectivityProbe`
-  kategorisi) ve bir sonraki bildirimde tekrar denenir. Uygulamanın kendisi hiçbir şekilde etkilenmez.
-- Bir pod aynı anda en fazla 4 bağlantıyı test eder; hedeflere ani bağlantı yükü binmez.
+- **Sürüm:** `Start`'ı çağıran assembly'nin `AssemblyInformationalVersion` ve `AssemblyVersion` değerlerinden büyük olanı
+  (`+commit` eki atılır). Her zamanki gibi verin: `.csproj` içinde `<Version>1.4.0</Version>` veya CI'da
+  `dotnet publish -p:Version=1.4.0`.
+- **Build:** assembly'nin MVID'sinin ilk 8 karakteri; derleyicinin her derlemede ürettiği benzersiz kimlik. Sürümü aynı
+  ama build'i farklı iki pod ayrı ayrı derlenmiştir.
+- **Build tarihi:** assembly dosyasının tarihi.
 
-### Strict modda pod durumları
+Monitor sürümü her kartta ve **Sürümler** sekmesinde gösterir; diğerlerinden farklı sürüm veya build çalıştıran pod'ları
+işaretler (ör. rollout sırasında ya da deploy yalnızca bir cluster'a ulaştığında).
 
-| Durum | Anlamı |
+---
+
+## Cluster'lar
+
+Monitor pod'ları cluster'a göre **kendiliğinden** gruplar:
+
+- **Kubernetes:** her pod'da cluster'ının CA sertifikası `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt` yolunda
+  bulunur. Kütüphane bunun parmak izini gönderir (SHA-256; sertifikanın kendisi asla gönderilmez); aynı cluster'daki tüm
+  pod'lar aynı cluster kimliğini alır. Namespace de aynı klasörden okunur.
+- **Kubernetes dışında** (IIS, sanal makineler): pod'lar bildirimlerinin geldiği ağ adresine göre gruplanır.
+
+Yeni cluster'lar "Cluster 1", "Cluster 2", … olarak görünür ve **Sürümler** sekmesinde yeniden adlandırılabilir
+(ör. "Prod İstanbul").
+
+---
+
+## Konsol mesajları
+
+Kütüphane hiçbir zaman hata fırlatmaz, stack trace yazmaz. Konsola (ve `System.Diagnostics.Trace`'e) `[ConnectivityProbe]`
+ile başlayan birkaç İngilizce satır yazar:
+
+| Ne zaman | Mesaj |
 |---|---|
-| Çalışıyor | Pod son 2 × bildirim aralığı içinde (yaklaşık 25 sn) bildirim gönderdi. |
-| Bildirim gecikti | Bildirim gecikti ama eşik henüz dolmadı. Alarm değil. |
-| Eksik | `MissingAfterCycles` (3) test aralığı boyunca bildirim yok ve pod sayısı azaldı. **Alarm.** Yalnızca *Pod listesini sıfırla* ile silinir. |
-| (listeden çıktı) | Pod "kapanıyorum" dedi (deploy, scale-down) ya da sayı korunarak yerine yeni pod geldi. Alarm yok. |
-
-### Ayarlar
-
-| Ayar | Varsayılan | Anlamı |
-|---|---|---|
-| `MonitorUrl` | – | Monitor'ün adresi. Pod'lar bu adrese erişebilmelidir. |
-| `AppKey` | – | Monitor'deki uygulama anahtarı. Pod'un hangi uygulamanın tanımlarını alacağını belirler. |
-| `Strict:IntervalSeconds` | Monitor'ün aralığı (30) | Test aralığı (sn). |
-| `Strict:CommandPollSeconds` | 10 | Pod'un Monitor'e bildirim sıklığı. "Şimdi test et" bu süre içinde pod'a ulaşır. |
-
-### Uygulama anahtarı
-
-- Uygulamayı tanımlar. Anahtarla bir pod yalnızca **o uygulamanın** bağlantı listesini okuyabilir ve onun adına sonuç
-  gönderebilir; başka bir şey yapamaz.
-- Monitor'de istediğiniz an yenileyebilirsiniz; eski anahtar hemen geçersiz olur.
-- Her ortam için ayrı uygulama (ve anahtar) kullanın, örneğin "Orders Test" ve "Orders Prod".
+| İlk başarılı bildirim | `Registered to monitor https://monitor.example.com as "orders-api" (3 connections).` |
+| Monitor'e ulaşılamadı / reddetti | `Could not connect to monitor https://monitor.example.com: <neden>` (ilk seferde, sonra en fazla 5 dakikada bir) |
+| Monitor'e yeniden ulaşıldı | `Reconnected to monitor https://monitor.example.com.` |
+| Ayarlar eksik | `MonitorUrl and AppKey are required. Connectivity probe is disabled.` |
+| Geçersiz URL | `Invalid MonitorUrl '...' (expected http:// or https://). Connectivity probe is disabled.` |
 
 ---
 
-## Discover mod ayrıntıları
+## Seçenekler
 
-1. Uygulamayı Monitor'e adresiyle kaydedin (pod'lara dağıtım yapan adres).
-2. Uygulamada uçları açın: ya ortak bir `AccessKey` (Monitor'deki `Monitor:AccessKey` ile aynı değer) ya da iç servislerde
-   `AllowAnonymous=true`.
-3. Monitor her turda:
-   - önce uygulamanın portuna TCP bağlantısı açar. Port kapalıysa nedenini yazar (timeout = firewall, reddedildi = servis
-     kapalı, DNS);
-   - `/connectivity-probe/identity`'yi yeni bağlantılarla çağırıp farklı `instanceId`'leri (pod'ları) sayar;
-   - atanan her bağlantıyı uygulamaya `/connectivity-probe/discover` ile test ettirir. Yanıt testi hangi pod'un yaptığını
-     söyler; sonuçlar pod başına gösterilir.
+Hepsi isteğe bağlıdır; dördüncü parametreyle verilir:
 
-Pod sayımı, load balancer'ın **yeni bağlantıları** pod'lara dağıttığını varsayar (Kubernetes Service ve ingress'ler
-varsayılan olarak böyledir). Session affinity açıksa her istek aynı pod'a düşer; bu durumda yanıtta `notes` uyarısı döner.
-Böyle bir uygulamada Strict modu kullanın.
-
----
-
-## Ayarlar
-
-| Ayar | Varsayılan | Anlamı |
-|---|---|---|
-| `Enabled` | `true` | `false` ise uçlar kapanır (Strict mod bundan bağımsızdır). |
-| `AccessKey` | boş | Uçlar için ortak erişim anahtarı. İstekler `X-ConnectivityProbe-Key` başlığında göndermelidir. |
-| `AllowAnonymous` | `false` | Anahtarsız erişime izin verir. Yalnızca iç servislerde. |
-| `AllowedTargets` | boş | İzin verilen hedefler: `sql01:1433`, `redis:*`, `*.svc.cluster.local:443`, `*.lan:*`. Boş = her hedef. |
-| `MaxConcurrentDiscover` | 20 | Aynı anda işlenen discover isteği (0 = sınırsız); fazlası `429` alır. |
-| `Path` | `/connectivity-probe` | Uçların taban yolu. |
-| `DefaultTimeoutMs` / `MaxTimeoutMs` | 5000 / 30000 | `timeoutMs` varsayılanı ve üst sınırı. |
-| `MaxAttempts` | 100 | Pod keşfinde en fazla identity isteği. |
-| `MaxRequestDurationSeconds` | 60 | Tek isteğin süre sınırı; dolunca yanıt `truncated: true` olur. |
-| `MaxAddresses` | 64 | Bir isim için test edilecek en fazla IP. |
-| `EnableIdentity` | `true` | `identity` ucunu açar/kapatır. |
-| `InstanceIdSeed` | boş | `instanceId`'ye eklenir (aynı makine adını paylaşan kopyalar için). |
-| `IdentityEnvironmentVariables` | `POD_NAME, POD_NAMESPACE, POD_IP, NODE_NAME, CLUSTER_NAME, HOSTNAME, APP_POOL_ID, ASPNETCORE_ENVIRONMENT` | Identity yanıtına kopyalanan ortam değişkenleri. Bunların dışında hiçbir değişken okunmaz. |
-| `Info:<ad>` | – | Identity yanıtına eklenen sabit değerler. |
-| `ListenerPrefixes` | `http://+:8099/` | Yalnızca `ConnectivityProbeListener`. |
-| `AutoRegister` | `true` | Yalnızca IIS: `false` ise modül kendini kaydetmez. |
-| `MonitorUrl`, `AppKey`, `Strict:IntervalSeconds`, `Strict:CommandPollSeconds` | – | Strict mod (yukarıya bakın). |
-
-Kodda `options.Log = (level, message) => ...` ile kütüphanenin log mesajlarını istediğiniz yere yönlendirebilirsiniz.
-ASP.NET Core'da kendiliğinden uygulamanın `ILogger`'ına (`ConnectivityProbe` kategorisi) yazılır. IIS'te, `Log`
-vermediyseniz Strict mod mesajları `System.Diagnostics.Trace`'e gider.
-
----
-
-## Uçlar
-
-Hepsi `GET`, JSON döner ve önbelleğe alınmaz. Hata yanıtları dahil her yanıtta `X-ConnectivityProbe: 1` başlığı bulunur.
-
-### `GET /connectivity-probe/discover`
-
-```
-/connectivity-probe/discover?host=sql01:1433                                          → yalnızca TCP testi
-/connectivity-probe/discover?host=https://orders.prod.svc&usesConnectivityProbe=true  → TCP + hedefin pod keşfi
+```csharp
+ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
+{
+    o.PollSeconds = 10;
+    o.IntervalSeconds = 60;
+});
 ```
 
-| Parametre | Varsayılan | Anlamı |
+| Seçenek | Varsayılan | Anlamı |
 |---|---|---|
-| `host` | (zorunlu) | Sunucu adı, IP, `sunucu:port` veya URL. IPv6: `[::1]:80`. |
-| `port` | `host`'taki port | 1–65535. Portsuz URL'de https için 443, http için 80. |
-| `usesConnectivityProbe` | `false` | Hedef de ConnectivityProbe kullanıyorsa `true`: TCP testinden sonra hedefin pod'ları keşfedilir. |
-| `timeoutMs` | 5000 | Tek bağlantının / isteğin zaman aşımı. |
-| `attempts` | `MaxAttempts` | Pod keşfinde en fazla identity isteği. |
-| `confidence` | 0.99 | Pod keşfi: hiçbir pod'un kaçırılmamış olma olasılığı (0.5–0.999). |
-| `scheme` | URL'den, yoksa `http` | Pod keşfi: `http` veya `https`. |
+| `PollSeconds` | 10 | Pod'un Monitor'e ne sıklıkla bildirim gönderdiği. Bildirimler geldikçe pod "çalışıyor" sayılır; "Şimdi test et" bu süre içinde ulaşır. |
+| `IntervalSeconds` | Monitor'ünki (30) | Test aralığı (sn). |
+| `TimeoutMs` | Monitor'ünki (5000) | Tek bağlantı denemesinin (ve DNS çözümlemesinin) zaman aşımı. |
+| `MaxAddresses` | 64 | Bir host adı için test edilen en fazla IP. |
+| `MaxParallelTests` | 4 | Bir pod'da aynı anda test edilen bağlantı sayısı. |
 
-`targetKind`: `tcp`, `unreachable`, `connectivityProbe` (hedefin pod'ları `instances[]` içinde), `connectivityProbeError`
-(hedef ConnectivityProbe kullanıyor ama isteği reddetti), `other` (hedef ConnectivityProbe kullanmıyor).
-
-### `GET /connectivity-probe/identity`
-
-Bu instance'ın kimliğini döner: `instanceId` (12 karakter, pod başına sabit), `machineName`, `processId`, `startedAtUtc`,
-`uptimeSeconds`, `localAddresses`, `os`, `framework`, `probeVersion`, `environment`, `info`, `request`.
-
-### Hata kodları
-
-| Kod | Ne zaman |
-|---|---|
-| `400` | Geçersiz `host`, port, `confidence` veya `scheme`. |
-| `401` | `AccessKey` tanımlı ve `X-ConnectivityProbe-Key` yok veya yanlış. |
-| `403` | Yapılandırılmamış (ne `AccessKey` ne `AllowAnonymous`) veya hedef `AllowedTargets` listesinde değil. |
-| `429` | Aynı anda çok fazla discover isteği (`MaxConcurrentDiscover`). |
+`ConnectivityProbeAgent.Current` çalışan agent'ı döner (süreç başına bir tane); `LastContactUtc`, `LastRunUtc`,
+`LastError` ve `AppId` özelliklerini sunar.
 
 ---
 
 ## Güvenlik
 
-- **Varsayılan olarak kapalıdır:** `AccessKey` veya `AllowAnonymous=true` yoksa uçlar her isteğe `403` döner.
-- `discover`, pod'un verilen adrese TCP bağlantısı açmasını sağlar. Dışarıdan erişilebilen bir serviste asla anahtarsız
-  bırakmayın; ingress'te `/connectivity-probe` yolunu kapatın ve hedefleri `AllowedTargets` ile sınırlayın.
-- `identity`; pod IP'lerini, makine adını, işletim sistemi / .NET sürümünü ve yalnızca `IdentityEnvironmentVariables`
-  listesindeki ortam değişkenlerini döner.
-- `AccessKey` ve `AppKey`'i secret veya ortam değişkeni olarak tutun.
-- Strict mod yalnızca pod'dan Monitor'e giden HTTPS ister; dışarıdan gelen bir porta gerek yoktur.
+- Kütüphane **hiç port ve uç açmaz**. Yalnızca `MonitorUrl`'e dışarı doğru HTTP(S) isteği yapar.
+- Gönderdikleri: pod adı, makine adı, süreç kimliği, IP adresleri, işletim sistemi / .NET sürümü, uygulama adı / sürümü /
+  build'i, cluster parmak izi, namespace ve yalnızca şu ortam değişkenleri: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
+  `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. Başka hiçbir değişken okunmaz.
+- Pod yalnızca Monitor'de kendi uygulamasına bağlanmış bağlantıları test eder.
+- Monitor iç ağlar için tasarlanmıştır: kayıt açıktır ve uygulama anahtarı uygulamayı tanımlar ama şifre değildir. Monitor
+  arayüzünü `Monitor:AdminPassword` ile koruyun ve HTTPS arkasında yayınlayın.
 
 ---
 
@@ -438,49 +313,76 @@ Bu instance'ın kimliğini döner: `instanceId` (12 karakter, pod başına sabit
 dotnet run --project src/ConnectivityProbe.Monitor
 ```
 
-Varsayılan adres: http://localhost:5087/ . Monitor bir NuGet paketi değil, kendi başına çalışan bir uygulamadır.
+Varsayılan adres: http://localhost:5087/ . Monitor bağımsız bir uygulamadır, NuGet paketi değildir. Her ortam (test, prod)
+için ayrı bir Monitor çalıştırın.
 
-**Neler sunar**
+**Ekranlar**
 
-- **Birimler → Ekipler → Uygulamalar.** Her ekibin kendi bağlantı havuzu vardır; ortak havuz herkese açıktır. Ekip
-  bağlantıları yalnızca o ekibin uygulamalarına atanabilir.
-- **Monitör ekranı:** üstte büyük bir alanda en kritik uygulama, altında "Dikkat gerektirenler" satırı ve her ekip için yatay
-  kayan bir satır. Her kartta durum, pod sayısı, bağlantı özeti ve **STRICT / DISCOVER** rozeti görünür. Ad, URL, ekip,
-  birim veya moda göre arama yapılabilir ("strict" yazın).
-- **Detay penceresi:** pod'lar (ad, IP'ler, son bildirim, kütüphane sürümü), bağlantı × pod matrisi (hangi hedef pod'a ne
-  zamandır erişilemediği), geçmiş ve *Pod listesini sıfırla*.
-- **Eksik pod'lar kendiliğinden asla silinmez.** Yalnızca *Pod listesini sıfırla* ile silinir. Geri dönen pod kendiliğinden
-  normale döner.
-- **Giriş:** `Monitor:AdminPassword` verilince arayüz ve yönetim API'si giriş ister. Şifre verilmezse arayüze yalnızca
-  Monitor'ün çalıştığı makineden (localhost) erişilebilir. Strict uçları (`/api/agent/*`) girişle değil, uygulama
-  anahtarıyla korunur.
+- **Monitör:** en kritik uygulama üstte büyük bir afişte; ardından "Dikkat gerektirenler" satırı ve her ekip için yatay
+  kayan bir satır. Her kart durumunu, pod sayısını, bağlantı özetini ve sürümünü gösterir. Uygulama, anahtar, ekip, sürüm,
+  cluster veya pod adıyla arayın.
+- **Detay penceresi:** cluster'a göre gruplanmış pod'lar (ad, IP'ler, sürüm, build, namespace, son bildirim), bağlantı ×
+  pod matrisi (hangi pod hangi hedefe ne zamandır erişemiyor), geçmiş ve *Pod listesini sıfırla*.
+- **Sürümler:** cluster'lar (yeniden adlandırılabilir) ve her cluster'da çalışan sürümleri gösteren uygulamalar ×
+  cluster'lar tablosu.
+- **Tanımlar:** Birimler → Ekipler → Uygulamalar. Her ekibin kendi bağlantı havuzu vardır; ortak havuz herkese açıktır.
+  Bağlantıyı uygulamanın üzerine sürükleyerek bağlayın. Bir bağlantı kayıtlı başka bir uygulamayı gösterebilir
+  ("hedef uygulama"); bu, matriste görünür.
+
+**Pod durumları**
+
+| Durum | Anlamı |
+|---|---|
+| Çalışıyor | Pod son 2 × `PollSeconds` (+5 sn) içinde bildirim gönderdi. |
+| Bildirim gecikti | Bildirim gecikti ama eşik henüz dolmadı. Alarm değildir. |
+| Eksik | `MissingAfterCycles` (3) test aralığı boyunca bildirim yok ve pod sayısı düştü. **Alarm.** Yalnızca *Pod listesini sıfırla* ile silinir; geri gelen pod kendiliğinden normale döner. |
+| (ayrıldı) | Pod veda etti (deploy, scale-down) veya sayı aynı kalırken yerine yeni pod geldi. Alarm yok. |
 
 **Ayarlar** (`appsettings.json` → `Monitor` veya ortam değişkenleri `Monitor__<Ad>`)
 
 | Ayar | Varsayılan | Anlamı |
 |---|---|---|
-| `AdminUser` / `AdminPassword` | `admin` / boş | Arayüz girişi. Monitor'e başkaları erişebiliyorsa şifreyi mutlaka verin. |
-| `AccessKey` | boş | Discover uygulamalarına gönderilen ortak anahtar (onların `ConnectivityProbe:AccessKey`'i ile aynı). |
-| `IntervalSeconds` | 30 | Test aralığı (Strict pod'ların aralığı da budur). |
-| `ProbeTimeoutMs` | 5000 | Tek bağlantının / isteğin zaman aşımı. |
-| `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için cevapsız geçmesi gereken tur sayısı. |
-| `MaxConcurrency` | 4 | Aynı anda kontrol edilen uygulama (Discover). |
-| `MaxConcurrentConnections` | 4 | Bir uygulamanın aynı anda test edilen bağlantı sayısı (Discover). |
-| `MaxInstanceAttempts` / `InstanceConfidence` | 60 / 0.95 | Pod sayımı (Discover). |
-| `MaxProbeCallsPerConnection` | 40 | Bir bağlantıyı tüm pod'larda test etmek için en fazla çağrı (Discover). |
-| `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) aynı klasörde tutulur. |
+| `AdminUser` / `AdminPassword` | `admin` / boş | Arayüz girişi. Şifre yoksa arayüze yalnızca Monitor'ün çalıştığı makineden (localhost) erişilir. Agent uçları (`/api/agent/*`) hiçbir zaman giriş istemez. |
+| `IntervalSeconds` | 30 | Pod'lara gönderilen test aralığı. |
+| `ProbeTimeoutMs` | 5000 | Pod'lara gönderilen bağlantı zaman aşımı. |
+| `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
+| `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
 
-Monitor'ü HTTPS arkasında yayınlayın. Aynı makinede bir ters proxy çalışıyorsa her istek localhost'tan geliyor görünür;
-bu durumda `AdminPassword`'ü mutlaka verin.
+Aynı makinede bir reverse proxy çalışıyorsa her istek localhost'tan geliyor görünür; bu durumda mutlaka `AdminPassword`
+verin.
 
 ---
 
-## Sürümler
+## 1.x'ten geçiş
+
+2.0.0 kıran bir sürümdür: her şey artık 1.1'in Strict modu gibi, tek satır kodla çalışır.
+
+| 1.x | 2.0 |
+|---|---|
+| `app.UseConnectivityProbe(...)`, hosting startup, IIS modülü, OWIN middleware, `ConnectivityProbeListener` | `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)` |
+| `/connectivity-probe/discover` ve `/identity` uçları, `AccessKey`, `AllowAnonymous`, `AllowedTargets` | Kaldırıldı. Uygulama hiç uç açmaz. |
+| Discover modu (Monitor uygulamayı çağırır, pod sayısı tahmini) | Kaldırıldı. Pod'lar kendini bildirir; sayı kesindir. |
+| Uygulama Monitor'de eklenir, `cpk_...` anahtarı üretilir | Anahtarı geliştirici belirler; ilk pod uygulamayı kaydeder. |
+| Paket hedefleri: net8.0, netstandard2.0, net462 | netstandard2.0, net462 (bağımlılıksız) |
+
+Adımlar:
+
+1. Paketi 2.0.0'a güncelleyin; `app.UseConnectivityProbe(...)` satırını (ve `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`,
+   `AccessKey`, `AllowAnonymous` ayarlarını) kaldırın.
+2. Açılışa `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)` ekleyin. Strict mod kullanan bir uygulama mevcut
+   `cpk_...` anahtarını kullanmaya devam edebilir: Monitor bu uygulamaları ve bağlantılarını korur.
+3. Monitor'ü 2.0'a güncelleyin. İlk açılışta Discover modunda kaydedilmiş (anahtarı olmayan) uygulamaları siler. Hâlâ 1.x
+   kullanan uygulamalar çalışmaya devam eder ama güncellenene kadar 2.0 Monitor'de görünmez.
+
+---
+
+## Sürüm geçmişi
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **1.1.0** | **Strict mod**: pod'lar tanımlarını uygulama anahtarıyla Monitor'den çeker, kendi içinden test eder ve sonucu gönderir. Kesin pod sayısı. Düzgün kapanışta "kapanıyorum" bildirimi. |
-| 1.0.0 | İlk sürüm: `discover` ve `identity` uçları, ASP.NET Core ve IIS'te kodsuz devreye alma, `MaxConcurrentDiscover`, `AllowedTargets` joker karakterleri, `probeVersion`, loglama. |
+| **2.0.0** | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |
+| 1.1.0 | Strict mod: pod'lar uygulama anahtarıyla tanımlarını çeker, içeriden test eder ve sonucu gönderir. |
+| 1.0.0 | İlk sürüm: `discover` ve `identity` uçları. |
 
 Tam liste: [CHANGELOG](src/ConnectivityProbe/CHANGELOG.md) · Sürümler: [GitHub Releases](https://github.com/umutmemisoglu/ConnectivityProbe/releases) ·
 Yeni sürüm yayınlama: [PUBLISHING.md](PUBLISHING.md)

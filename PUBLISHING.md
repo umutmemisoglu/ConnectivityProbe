@@ -1,16 +1,16 @@
 # ConnectivityProbe NuGet paketini yayınlama
 
-Pakete yalnızca kütüphane girer: `src/ConnectivityProbe` (discover + identity uçları, Strict agent ve platform adaptörleri).
+Pakete yalnızca kütüphane girer: `src/ConnectivityProbe` (`ConnectivityProbeAgent`, bağımlılıksız).
 Monitor, örnek uygulama ve testler pakete girmez.
 
 ## Kısa yol (kullanılan yöntem): GitHub Actions
 
-1. `src/ConnectivityProbe/CHANGELOG.md` dosyasına yeni sürümün bölümünü ekleyin (`## 1.2.0`, altında `### English` ve `### Türkçe`).
+1. `src/ConnectivityProbe/CHANGELOG.md` dosyasına yeni sürümün bölümünü ekleyin (`## 2.1.0`, altında `### English` ve `### Türkçe`).
 2. `ConnectivityProbe.csproj` içindeki `<Version>` değerini artırın, commit edip `main`'e gönderin.
 3. Etiketi gönderin:
    ```bash
-   git tag -a v1.2.0 -m "ConnectivityProbe 1.2.0"
-   git push origin v1.2.0
+   git tag -a v2.1.0 -m "ConnectivityProbe 2.1.0"
+   git push origin v2.1.0
    ```
 
 `.github/workflows/publish.yml` testleri çalıştırır, paketi etiketteki sürümle üretir ve nuget.org'a API anahtarı olmadan
@@ -30,10 +30,10 @@ Sonra `src/ConnectivityProbe/ConnectivityProbe.csproj` içindeki paket bilgileri
 | Alan | Şu anki değer | Not |
 |---|---|---|
 | `PackageId` | `ConnectivityProbe` | nuget.org'da paket adı ilk yükleyen hesaba bağlanır; ilk yüklemeden sonra bu ad yalnızca sizin hesabınızla güncellenebilir. |
-| `Version` | `1.0.0` | Her yayında artırın (aşağıya bakın). Aynı sürüm ikinci kez yüklenemez. |
+| `Version` | `2.0.0` | Her yayında artırın (aşağıya bakın). Aynı sürüm ikinci kez yüklenemez. |
 | `Authors` / `Copyright` | `Fatih Umut Memişoğlu` | Paket sayfasında yazar ve telif sahibi olarak görünür. |
 | Lisans | `MIT` | Açık kaynak. Pakette `PackageLicenseExpression`, depoda kökteki `LICENSE` dosyası. |
-| `RepositoryUrl` / `PackageProjectUrl` | tanımlı değil | Kaynak kodu GitHub gibi herkese açık bir yere koyduğunuzda ekleyin; nuget.org sayfasında "Source repository" bağlantısı olarak görünür (bkz. 8. adım). |
+| `RepositoryUrl` / `PackageProjectUrl` | `https://github.com/umutmemisoglu/ConnectivityProbe` | nuget.org sayfasında "Source repository" bağlantısı olarak görünür. |
 
 > **Önemli:** nuget.org herkese açıktır. Paket ve içindeki README herkes tarafından indirilebilir ve **silinemez**, yalnızca
 > listeden kaldırılabilir (unlist). Kod iş kapsamında yazıldığı için telif hakkı işverene ait olabilir; herkese açık ve MIT
@@ -54,7 +54,7 @@ dotnet pack src/ConnectivityProbe/ConnectivityProbe.csproj -c Release -o artifac
 
 Çıktılar:
 
-- `artifacts/ConnectivityProbe.<sürüm>.nupkg`: paketin kendisi. İçinde `lib/net462`, `lib/netstandard2.0`, `lib/net8.0`, README ve CHANGELOG bulunur.
+- `artifacts/ConnectivityProbe.<sürüm>.nupkg`: paketin kendisi. İçinde `lib/net462`, `lib/netstandard2.0`, README ve CHANGELOG bulunur.
 - `artifacts/ConnectivityProbe.<sürüm>.snupkg`: hata ayıklama sembolleri. nuget.org bunu otomatik olarak sembol sunucusuna alır.
 
 ## 3. Yayından önce yerelde deneme (isteğe bağlı)
@@ -63,7 +63,7 @@ dotnet pack src/ConnectivityProbe/ConnectivityProbe.csproj -c Release -o artifac
 
 ```bash
 dotnet nuget add source <repo>/artifacts -n localcp
-dotnet add package ConnectivityProbe --version 1.0.0
+dotnet add package ConnectivityProbe --version 2.0.0
 ```
 
 ## 4. nuget.org'a yükleme
@@ -78,7 +78,7 @@ dotnet add package ConnectivityProbe --version 1.0.0
 3. **Yükleyin.** `.snupkg` dosyası aynı klasörde olduğu için semboller de otomatik yüklenir:
 
    ```bash
-   dotnet nuget push artifacts/ConnectivityProbe.1.0.0.nupkg --api-key <API_ANAHTARI> --source https://api.nuget.org/v3/index.json
+   dotnet nuget push artifacts/ConnectivityProbe.2.0.0.nupkg --api-key <API_ANAHTARI> --source https://api.nuget.org/v3/index.json
    ```
 
    Anahtarı komut geçmişinde bırakmamak için ortam değişkeniyle de verebilirsiniz:
@@ -96,7 +96,7 @@ Paket yalnızca şirket içinde kullanılacaksa nuget.org yerine iç feed'e yük
 ProGet...):
 
 ```bash
-dotnet nuget push artifacts/ConnectivityProbe.1.0.0.nupkg --api-key <ANAHTAR> --source <İÇ_FEED_URL>
+dotnet nuget push artifacts/ConnectivityProbe.2.0.0.nupkg --api-key <ANAHTAR> --source <İÇ_FEED_URL>
 ```
 
 Tüketen projelere feed'i ekleyin (`nuget.config`):
@@ -120,10 +120,11 @@ Tüketen projelere feed'i ekleyin (`nuget.config`):
    ([SemVer](https://semver.org/lang/tr/)):
    - **Yama** `1.0.1`: hata düzeltmesi.
    - **Minor** `1.1.0`: geriye uyumlu yeni özellik (yeni ayar, yanıta yeni alan).
-   - **Major** `2.0.0`: kıran değişiklik (uç adı/yolu, yanıt alanlarının anlamı, varsayılan güvenlik davranışı).
+   - **Major** `3.0.0`: kıran değişiklik (`Start` imzası, agent protokolü, varsayılan davranış).
 4. 2. ve 4. adımları tekrarlayın.
 
-Yüklü sürüm her yanıtta `probeVersion` olarak döner; hangi uygulamanın hangi sürümü kullandığı uzaktan görülebilir.
+Her pod kullandığı kütüphane sürümünü Monitor'e bildirir; hangi uygulamanın hangi sürümü kullandığı Monitor'deki pod
+ayrıntılarında görülür.
 
 ## 7. Kaynak kopyası yerine pakete geçiş
 
@@ -133,27 +134,17 @@ Kaynak kopyası (`src/ConnectivityProbe` projesi) yerine paketi kullanmak için:
 2. Merkezi paket yönetimi (Central Package Management) kullanılıyorsa:
    - `Directory.Packages.props` dosyasına ekleyin:
      ```xml
-     <PackageVersion Include="ConnectivityProbe" Version="1.0.0" />
+     <PackageVersion Include="ConnectivityProbe" Version="2.0.0" />
      ```
    - `Web.csproj` içinde `ProjectReference` yerine:
      ```xml
      <PackageReference Include="ConnectivityProbe" />
      ```
 3. Dockerfile'dan `src/ConnectivityProbe/ConnectivityProbe.csproj` için eklenen `COPY` satırını kaldırın.
-4. `Program.cs` değişmez: `using ConnectivityProbe;` ve `app.UseConnectivityProbe(...)` aynen çalışır.
+4. `Program.cs` değişmez: `ConnectivityProbeAgent.Start(...)` aynen çalışır.
 
-## 8. Kaynak kodu açık kaynak olarak paylaşma (önerilir)
+## 8. Açık kaynak depo
 
-Açık kaynak bir paketin kaynak kodu da herkese açık olmalıdır; nuget.org sayfasından koda ulaşılabilmesi güven verir.
-
-1. GitHub'da `ConnectivityProbe` adında **public** bir depo açın.
-2. Bu klasörü Git deposu yapıp gönderin. `bin/`, `obj/`, `artifacts/`, `.vs/` ve Monitor'ün `data/` klasörünü
-   `.gitignore` ile dışarıda bırakın: `data/` içinde Monitor'e girdiğiniz iç sunucu adları var.
-3. `ConnectivityProbe.csproj` içine ekleyin:
-   ```xml
-   <PackageProjectUrl>https://github.com/<kullanıcı>/ConnectivityProbe</PackageProjectUrl>
-   <RepositoryUrl>https://github.com/<kullanıcı>/ConnectivityProbe</RepositoryUrl>
-   <RepositoryType>git</RepositoryType>
-   <PublishRepositoryUrl>true</PublishRepositoryUrl>
-   ```
-4. Yeni bir sürüm (ör. `1.0.1`) üretip yükleyin; bağlantılar paket sayfasında görünür.
+Kaynak kod https://github.com/umutmemisoglu/ConnectivityProbe adresinde herkese açıktır. `bin/`, `obj/`, `artifacts/`,
+`.vs/` ve Monitor'ün `data/` klasörü `.gitignore` ile dışarıda bırakılır: `data/` içinde Monitor'e girilen iç sunucu
+adları bulunur, asla commit edilmemelidir.

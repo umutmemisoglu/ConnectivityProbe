@@ -125,34 +125,64 @@ api.MapPost("/auth/logout", async (HttpContext ctx) =>
 });
 
 // ---------------------------------------------------------------------------------------------
-// Strict mod: pod'ların (ConnectivityProbeAgent) uçları. Uygulama anahtarıyla korunur.
+// Pod'ların (ConnectivityProbeAgent) uçları. Girişten bağımsızdır; uygulama anahtarı başlıkta gelir.
 // ---------------------------------------------------------------------------------------------
 
-// Pod bildirimi: "bu pod yaşıyor" (+ varsa test sonuçları). Yanıtta uygulamanın bağlantı tanımları ve test ayarları döner.
-api.MapPost("/agent/v1/report", (HttpContext ctx, AgentReport report, DefinitionStore store, MonitorService monitor) =>
+// Pod bildirimi: "bu pod yaşıyor" (+ varsa test sonuçları). Monitor bu anahtarı ilk kez görüyorsa uygulamayı kendiliğinden
+// kaydeder ("Atanmamış" altında). Yanıtta uygulamaya atanmış bağlantılar ve test ayarları döner.
+api.MapPost("/agent/v2/report", (HttpContext ctx, AgentReport report, DefinitionStore store, MonitorService monitor) =>
 {
+    var key = ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader].ToString().Trim();
+    if (ValidateAppKey(key) is { } keyError) return Results.BadRequest(new { error = keyError });
+    if (string.IsNullOrWhiteSpace(report.Pod?.InstanceId)) return Results.BadRequest(new { error = "pod.instanceId is required" });
+
     var defs = store.Snapshot();
-    var target = FindStrictApp(defs, ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader]);
-    if (target == null) return Results.Json(new { error = "Geçersiz uygulama anahtarı" }, statusCode: StatusCodes.Status401Unauthorized);
-    if (string.IsNullOrWhiteSpace(report.Identity?.InstanceId)) return Results.BadRequest(new { error = "identity.instanceId zorunlu" });
-    return Results.Ok(monitor.AcceptAgentReport(target, defs, report));
+    var target = FindApp(defs, key);
+    if (target == null)
+    {
+        // Kayıt: aynı anda birden fazla pod gelebilir; kilit altında tekrar kontrol ediyoruz.
+        var name = string.IsNullOrWhiteSpace(report.AppName) ? key : report.AppName.Trim();
+        target = store.Mutate(d =>
+        {
+            var existing = FindApp(d, key);
+            if (existing != null) return existing;
+            var created = new AppDefinition { Id = NewId(), Name = name.Length > 100 ? name[..100] : name, AppKey = key, RegisteredAtUtc = DateTime.UtcNow };
+            d.Apps.Add(created);
+            return created;
+        });
+        app.Logger.LogInformation("Application {Name} registered with key {Key}", target.Name, key);
+        defs = store.Snapshot();
+    }
+    return Results.Ok(monitor.AcceptAgentReport(target, defs, report, SourceIp(ctx)));
 });
 
 // Pod düzgün kapanıyor: alarm vermeden listeden çıkarılır.
-api.MapPost("/agent/v1/goodbye", (HttpContext ctx, AgentGoodbye input, DefinitionStore store, MonitorService monitor) =>
+api.MapPost("/agent/v2/goodbye", (HttpContext ctx, AgentGoodbye input, DefinitionStore store, MonitorService monitor) =>
 {
-    var target = FindStrictApp(store.Snapshot(), ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader]);
-    if (target == null) return Results.Json(new { error = "Geçersiz uygulama anahtarı" }, statusCode: StatusCodes.Status401Unauthorized);
-    if (!string.IsNullOrWhiteSpace(input.InstanceId)) monitor.AgentGoodbye(target.Id, input.InstanceId);
+    var target = FindApp(store.Snapshot(), ctx.Request.Headers[ConnectivityProbeOptions.AppKeyHeader].ToString().Trim());
+    if (target != null && !string.IsNullOrWhiteSpace(input.InstanceId)) monitor.AgentGoodbye(target.Id, input.InstanceId);
     return Results.NoContent();
 });
 
-// Tüm tanımları (birimler, ekipler, uygulamalar, bağlantı havuzu) döner.
+// Tüm tanımları (birimler, ekipler, uygulamalar, bağlantı havuzu, cluster'lar) döner.
 api.MapGet("/definitions", (DefinitionStore store) =>
 {
     var d = store.Snapshot();
     return new DefinitionsView(d.Units, d.Teams,
-        d.Apps.Select(AppView.From).ToList(), d.Connections.Select(ConnectionView.From).ToList());
+        d.Apps.Select(AppView.From).ToList(), d.Connections.Select(ConnectionView.From).ToList(), d.Clusters);
+});
+
+// Cluster'a anlamlı bir ad verir (ör. "Prod İstanbul"); ilk görüldüğünde "Cluster N" adını alır.
+api.MapPut("/clusters/{key}", (string key, ClusterInput input, DefinitionStore store) =>
+{
+    if (ValidateName(input.Name) is { } error) return Results.BadRequest(new { error });
+    var cluster = store.Mutate(d =>
+    {
+        var c = d.Clusters.FirstOrDefault(x => x.Key == key);
+        if (c != null) c.Name = input.Name!.Trim();
+        return c;
+    });
+    return cluster == null ? Results.NotFound() : Results.Ok(cluster);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -238,7 +268,7 @@ api.MapDelete("/teams/{id}", (string id, DefinitionStore store) =>
 // ---------------------------------------------------------------------------------------------
 
 // Havuza yeni bağlantı ekler. Host ad, IP, ad:port veya tam URL olabilir. TeamId verilirse o ekibin havuzuna, verilmezse ortak
-// havuza eklenir. Checkpoint: UsesConnectivityProbe = hedef de ConnectivityProbe kullanıyor mu.
+// havuza eklenir. TargetAppId: hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği (isteğe bağlı).
 api.MapPost("/connections", (ConnectionInput input, DefinitionStore store) =>
 {
     if (ValidateConnection(input) is { } error) return Results.BadRequest(new { error });
@@ -246,15 +276,16 @@ api.MapPost("/connections", (ConnectionInput input, DefinitionStore store) =>
     var conn = new ConnectionDefinition
     {
         Id = NewId(), TeamId = NullIfEmpty(input.TeamId), Name = input.Name!.Trim(), Host = input.Host!.Trim(), Port = input.Port,
-        UsesConnectivityProbe = input.UsesConnectivityProbe == true
+        TargetAppId = NullIfEmpty(input.TargetAppId)
     };
-    var ok = store.Mutate(d =>
+    var error2 = store.Mutate(d =>
     {
-        if (conn.TeamId != null && d.Teams.All(t => t.Id != conn.TeamId)) return false;
+        if (conn.TeamId != null && d.Teams.All(t => t.Id != conn.TeamId)) return "Ekip bulunamadı";
+        if (conn.TargetAppId != null && d.Apps.All(a => a.Id != conn.TargetAppId)) return "Hedef uygulama bulunamadı";
         d.Connections.Add(conn);
-        return true;
+        return null;
     });
-    return ok ? Results.Ok(ConnectionView.From(conn)) : Results.BadRequest(new { error = "Ekip bulunamadı" });
+    return error2 == null ? Results.Ok(ConnectionView.From(conn)) : Results.BadRequest(new { error = error2 });
 });
 
 // Havuzdaki bir bağlantıyı günceller. Sahibi değiştiyse (başka ekip / ortak), artık kullanamayacak uygulamalardan çıkarılır.
@@ -268,11 +299,13 @@ api.MapPut("/connections/{id}", (string id, ConnectionInput input, DefinitionSto
         if (c == null) return (View: (ConnectionView?)null, Error: (string?)"notfound");
         var teamId = NullIfEmpty(input.TeamId);
         if (teamId != null && d.Teams.All(t => t.Id != teamId)) return (null, "Ekip bulunamadı");
+        var targetAppId = NullIfEmpty(input.TargetAppId);
+        if (targetAppId != null && d.Apps.All(a => a.Id != targetAppId)) return (null, "Hedef uygulama bulunamadı");
 
         c.Name = input.Name!.Trim();
         c.Host = input.Host!.Trim();
         c.Port = input.Port;
-        c.UsesConnectivityProbe = input.UsesConnectivityProbe == true;
+        c.TargetAppId = targetAppId;
         c.TeamId = teamId;
         if (teamId != null)
             foreach (var a in d.Apps.Where(a => a.TeamId != teamId)) a.ConnectionIds.Remove(id);
@@ -297,40 +330,15 @@ api.MapDelete("/connections/{id}", (string id, DefinitionStore store) =>
 });
 
 // ---------------------------------------------------------------------------------------------
-// Uygulamalar: izlenecek, ConnectivityProbe yüklü uygulamalar
+// Uygulamalar: Monitor'de eklenmez; pod'lar anahtarlarıyla ilk bildirimde kendiliğinden kaydeder.
 // ---------------------------------------------------------------------------------------------
 
-// Yeni uygulama kaydeder (ad + URL + ekip). Erişim anahtarı ortaktır (Monitor:AccessKey).
-api.MapPost("/apps", (AppInput input, DefinitionStore store, MonitorService monitor) =>
-{
-    if (Validate(input) is { } error) return Results.BadRequest(new { error });
-
-    var mode = AppModes.Normalize(input.Mode);
-    var app = new AppDefinition
-    {
-        Id = NewId(), TeamId = NullIfEmpty(input.TeamId), Name = input.Name!.Trim(), Mode = mode,
-        AppKey = mode == AppModes.Strict ? NewAppKey() : null,
-        BaseUrl = (input.BaseUrl ?? "").Trim().TrimEnd('/'), ProbePath = NormalizePath(input.ProbePath)
-    };
-    var ok = store.Mutate(d =>
-    {
-        if (app.TeamId != null && d.Teams.All(t => t.Id != app.TeamId)) return false;
-        d.Apps.Add(app);
-        return true;
-    });
-    if (!ok) return Results.BadRequest(new { error = "Ekip bulunamadı" });
-    monitor.Trigger();
-    return Results.Ok(AppView.From(app));
-});
-
-// Uygulamanın adını/URL'sini/ekibini günceller.
-// - URL değiştiyse bu artık başka bir uygulamadır: eski pod geçmişi silinir (yoksa eski adresin pod'ları yanlış "eksik" görünürdü).
-// - Ekip değiştiyse eski ekibin havuzundan atanmış bağlantılar çıkarılır (ortak bağlantılar kalır).
+// Uygulamanın adını ve ekibini günceller (anahtar uygulamanın kimliğidir, değişmez).
+// Ekip değiştiyse eski ekibin havuzundan atanmış bağlantılar çıkarılır (ortak bağlantılar kalır).
 api.MapPut("/apps/{id}", (string id, AppInput input, DefinitionStore store, MonitorService monitor) =>
 {
-    if (Validate(input) is { } error) return Results.BadRequest(new { error });
+    if (ValidateName(input.Name) is { } error) return Results.BadRequest(new { error });
 
-    var forget = false;
     var result = store.Mutate(d =>
     {
         var a = d.Apps.FirstOrDefault(x => x.Id == id);
@@ -338,17 +346,7 @@ api.MapPut("/apps/{id}", (string id, AppInput input, DefinitionStore store, Moni
         var teamId = NullIfEmpty(input.TeamId);
         if (teamId != null && d.Teams.All(t => t.Id != teamId)) return (null, "Ekip bulunamadı");
 
-        var newUrl = (input.BaseUrl ?? "").Trim().TrimEnd('/');
-        var newMode = AppModes.Normalize(input.Mode);
-        // Mod değiştiyse pod listesi başka kaynaktan gelecek; Discover'da adres değiştiyse başka bir uygulamadır. İki durumda da
-        // eski pod geçmişi silinir (yoksa eski pod'lar yanlış "eksik" görünürdü). Strict'te adres yalnızca dış kontrol içindir.
-        forget = newMode != a.Mode
-                 || (newMode == AppModes.Discover && !string.Equals(a.BaseUrl, newUrl, StringComparison.OrdinalIgnoreCase));
-        a.Mode = newMode;
-        if (newMode == AppModes.Strict) a.AppKey ??= NewAppKey(); // Discover'a dönüp tekrar Strict olursa aynı anahtar kullanılır
         a.Name = input.Name!.Trim();
-        a.BaseUrl = newUrl;
-        a.ProbePath = NormalizePath(input.ProbePath);
         if (a.TeamId != teamId)
         {
             a.TeamId = teamId;
@@ -359,27 +357,18 @@ api.MapPut("/apps/{id}", (string id, AppInput input, DefinitionStore store, Moni
 
     if (result.Error == "notfound") return Results.NotFound();
     if (result.Error != null) return Results.BadRequest(new { error = result.Error });
-    if (forget) monitor.ForgetApp(id);
     monitor.Trigger();
     return Results.Ok(result.View);
 });
 
-// Strict uygulamanın anahtarını yeniler: eski anahtar hemen geçersiz olur (pod'lar yeni anahtarla yeniden yapılandırılmalıdır).
-api.MapPost("/apps/{id}/regenerate-key", (string id, DefinitionStore store) =>
-{
-    var view = store.Mutate(d =>
-    {
-        var a = d.Apps.FirstOrDefault(x => x.Id == id && x.Mode == AppModes.Strict);
-        if (a == null) return null;
-        a.AppKey = NewAppKey();
-        return AppView.From(a);
-    });
-    return view == null ? Results.NotFound() : Results.Ok(view);
-});
-
-// Uygulamayı siler (izleme de durur).
+// Uygulamayı siler. Pod'ları hâlâ çalışıyorsa bir sonraki bildirimde kendini yeniden kaydeder (ekipsiz, bağlantısız);
+// kalıcı olarak kaldırmak için uygulamadan ConnectivityProbe'u da çıkarın.
 api.MapDelete("/apps/{id}", (string id, DefinitionStore store) =>
-    store.Mutate(d => d.Apps.RemoveAll(a => a.Id == id) > 0) ? Results.NoContent() : Results.NotFound());
+    store.Mutate(d =>
+    {
+        foreach (var c in d.Connections.Where(c => c.TargetAppId == id)) c.TargetAppId = null;
+        return d.Apps.RemoveAll(a => a.Id == id) > 0;
+    }) ? Results.NoContent() : Results.NotFound());
 
 // "Pod listesini sıfırla": Monitor'ün bu uygulama için hatırladığı pod'ları (eksik olanlar dahil) siler; mevcut pod'lar
 // hemen yeniden keşfedilir. Eksik pod'lar kendiliğinden hiç silinmediği için temizlemenin tek yolu budur.
@@ -424,8 +413,7 @@ api.MapDelete("/apps/{appId}/connections/{connId}", (string appId, string connId
 // Arayüzün periyodik okuduğu güncel durum: her uygulama için pod sayısı, pod listesi ve bağlantı sonuçları.
 api.MapGet("/monitor", (MonitorService monitor) => monitor.GetSnapshot());
 
-// "Şimdi test et": bir sonraki aralığı beklemeden yeni bir test turu başlatır. Strict pod'lar bunu bir sonraki bildirimlerinde
-// (en geç ConnectivityProbe:Strict:CommandPollSeconds, varsayılan 10 sn) görüp beklemeden test eder.
+// "Şimdi test et": pod'lar bunu bir sonraki bildirimlerinde (en geç PollSeconds, varsayılan 10 sn) görüp beklemeden test eder.
 api.MapPost("/monitor/run", (MonitorService monitor) =>
 {
     monitor.RequestRun();
@@ -440,32 +428,33 @@ app.Run();
 
 static string NewId() => Guid.NewGuid().ToString("N");
 
-// Strict uygulama anahtarı: 32 rastgele bayt, URL ve ortam değişkeninde sorunsuz kullanılabilir biçimde (base64url).
-static string NewAppKey() =>
-    "cpk_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+// Anahtara sahip uygulamayı bulur. Anahtarlar büyük/küçük harfe duyarlıdır ("Orders" ile "orders" farklı uygulamalardır).
+static AppDefinition? FindApp(DefinitionData defs, string? key) =>
+    string.IsNullOrEmpty(key) ? null : defs.Apps.FirstOrDefault(a => string.Equals(a.AppKey, key, StringComparison.Ordinal));
 
-// Anahtara sahip Strict uygulamayı bulur (sabit sürede karşılaştırma).
-static AppDefinition? FindStrictApp(DefinitionData defs, string? key)
+// Uygulama anahtarı: geliştiricinin belirlediği değer (ör. "orders-api"). Görünür ASCII karakterler, en fazla 200.
+static string? ValidateAppKey(string key)
 {
-    if (string.IsNullOrWhiteSpace(key)) return null;
-    AppDefinition? found = null;
-    foreach (var a in defs.Apps)
-        if (a.Mode == AppModes.Strict && a.AppKey != null && FixedEquals(a.AppKey, key.Trim())) found = a;
-    return found;
+    if (key.Length == 0) return "X-ConnectivityProbe-AppKey header is required";
+    if (key.Length > 200) return "App key is too long (max 200 characters)";
+    if (key.Any(ch => ch < 0x21 || ch > 0x7E)) return "App key may only contain visible ASCII characters (no spaces)";
+    return null;
+}
+
+// Bildirimin geldiği adres. Ters proxy arkasındaysa X-Forwarded-For'un ilk değeri; Kubernetes dışındaki pod'lar buna göre gruplanır.
+static string SourceIp(HttpContext ctx)
+{
+    var forwarded = ctx.Request.Headers["X-Forwarded-For"].ToString();
+    if (!string.IsNullOrWhiteSpace(forwarded)) return forwarded.Split(',')[0].Trim();
+    var ip = ctx.Connection.RemoteIpAddress;
+    if (ip == null) return "unknown";
+    return (ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip).ToString();
 }
 
 static bool FixedEquals(string? a, string? b) =>
     CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a ?? ""), Encoding.UTF8.GetBytes(b ?? "")) && a != null && b != null;
 
 static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
-
-// Probe yolu "/" ile başlamalı; boşsa varsayılanı kullanılır.
-static string NormalizePath(string? path)
-{
-    path = path?.Trim();
-    if (string.IsNullOrEmpty(path)) return "/connectivity-probe";
-    return (path.StartsWith('/') ? path : "/" + path).TrimEnd('/');
-}
 
 static string? ValidateName(string? name)
 {
@@ -474,22 +463,8 @@ static string? ValidateName(string? name)
     return null;
 }
 
-// Uygulama girdisi geçerli değilse hata mesajını, geçerliyse null döner.
-static string? Validate(AppInput i)
-{
-    if (ValidateName(i.Name) is { } nameError) return nameError;
-    // Strict modda adres isteğe bağlıdır (HTTP'si olmayan worker'lar da izlenebilir); verilirse Monitor dışarıdan erişimi kontrol eder.
-    if (AppModes.Normalize(i.Mode) == AppModes.Strict && string.IsNullOrWhiteSpace(i.BaseUrl)) return null;
-    if (!Uri.TryCreate(i.BaseUrl?.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
-        return "URL http:// veya https:// ile başlayan geçerli bir adres olmalı";
-    // Probe yolu URL'nin sonuna eklendiği için sorgu (?...) veya parça (#...) içeremez.
-    if (uri.Query.Length > 0 || uri.Fragment.Length > 0) return "URL '?' veya '#' içeremez";
-    if (i.ProbePath != null && i.ProbePath.IndexOfAny(new[] { '?', '#', ' ' }) >= 0) return "Probe yolu '?', '#' veya boşluk içeremez";
-    return null;
-}
-
-// Bağlantı girdisi geçerli değilse hata mesajını, geçerliyse null döner. Host/port kuralı uygulamalardaki probe uçlarıyla
-// aynıdır (ProbeTarget): sql01 + port, sql01:1433, IP, [::1]:5078 veya https://... (port URL'den) kabul edilir.
+// Bağlantı girdisi geçerli değilse hata mesajını, geçerliyse null döner. Host/port kuralı pod'lardaki testle aynıdır
+// (ProbeTarget): sql01 + port, sql01:1433, IP, [::1]:5078 veya https://... (port URL'den) kabul edilir.
 static string? ValidateConnection(ConnectionInput i)
 {
     if (ValidateName(i.Name) is { } nameError) return nameError;

@@ -45,28 +45,6 @@ async function api(method, url, body) {
   try { return await res.json(); } catch { return null; }
 }
 
-// "host:port" biçiminde karşılaştırma anahtarı (şemasızsa http varsayılır): bağlantı hedefini izlenen uygulamalarla eşleştirmek için.
-function targetKey(text) {
-  try {
-    const u = new URL(/^[a-z]+:\/\//i.test(text) ? text : 'http://' + text);
-    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
-    const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    return (host === '127.0.0.1' || host === '::1' ? 'localhost' : host) + ':' + port;
-  } catch { return null; }
-}
-
-// Bağlantı hedefi Monitor'de izlenen bir uygulamaysa o uygulamanın bilinen pod'ları (bu turda tesadüfen görülmeyenler hariç).
-function expectedPodsOf(conn) {
-  const key = targetKey(conn.host ? targetOf(conn) : conn.target);
-  const app = key && (snap?.apps || []).find((a) => targetKey(a.baseUrl) === key);
-  if (!app || !app.pods?.length) return null;
-  return app.pods.filter((p) => p.state !== 'unconfirmed');
-}
-
-// Hedef pod etiketi: makine (pod) adı; aynı ad birden fazla pod'da varsa ayırt etmek için kısa kimlik de eklenir.
-const podLabel = (p, all) =>
-  all.filter((x) => x.machineName === p.machineName).length > 1 ? `${p.machineName}·${p.instanceId.slice(0, 6)}` : p.machineName;
-
 const timeOf = (iso) => (iso ? new Date(iso).toLocaleTimeString('tr-TR') : '-');
 // Bugünse yalnızca saat, değilse tarih + saat.
 const dateTimeOf = (iso) => {
@@ -105,6 +83,12 @@ const appTeamId = (appId) => {
 };
 const teamLabel = (t) => `${unitOf(t.unitId)?.name ?? '?'} / ${t.name}`;
 
+// Pod'un görünen adı (Kubernetes'te pod adı, değilse makine adı) ve sürüm etiketi ("1.4.0 · b7e2c1a0").
+const podName = (p) => p.details?.POD_NAME || p.details?.HOSTNAME || p.machineName;
+const versionLabel = (p) => (p.appVersion || '?') + (p.buildId ? ' · ' + p.buildId.slice(0, 6) : '');
+// Uygulamanın canlı pod'larındaki farklı sürüm/build'ler.
+const buildsOf = (s) => [...new Set((s.pods || []).filter((p) => p.state === 'up').map(versionLabel))];
+
 // ---------------------------------------------------------------------------------------------
 // Sekmeler ve üst çubuk
 // ---------------------------------------------------------------------------------------------
@@ -113,6 +97,8 @@ function setTab(name) {
   save('tab', name);
   $('#tab-monitor').hidden = name !== 'monitor';
   $('#tab-defs').hidden = name !== 'defs';
+  $('#tab-versions').hidden = name !== 'versions';
+  if (name === 'versions') renderVersions();
   $('#navTools').hidden = name !== 'monitor'; // arama ve filtre yalnızca monitörde anlamlı
   window.scrollTo(0, 0);
   $('#topbar').classList.toggle('scrolled', name !== 'monitor'); // Tanımlar'da billboard yok: menü baştan koyu
@@ -123,13 +109,8 @@ function setTab(name) {
 function renderMeta() {
   if (!snap) { $('#meta').textContent = ''; return; }
   const parts = [];
-  if (snap.running) parts.push('test çalışıyor…');
-  if (snap.lastRunUtc) parts.push('son tur ' + timeOf(snap.lastRunUtc));
-  if (snap.nextRunUtc && !snap.running) {
-    const left = Math.max(0, Math.round((new Date(snap.nextRunUtc) - Date.now()) / 1000));
-    parts.push('sonraki ' + left + ' sn');
-  }
-  parts.push('her ' + snap.intervalSeconds + ' sn');
+  if (snap.lastRunUtc) parts.push('güncellendi ' + timeOf(snap.lastRunUtc));
+  parts.push('pod\'lar her ' + snap.intervalSeconds + ' sn test eder');
   $('#meta').textContent = parts.join(' · ');
 }
 
@@ -231,7 +212,7 @@ const poolChip = (c) => `
   <div class="chip" draggable="true" data-conn="${c.id}">
     <span class="grip">⋮⋮</span>
     <span class="grow conn-info">
-      <span class="name">${esc(c.name)}${cpBadge(c)}</span>
+      <span class="name">${esc(c.name)}${targetBadge(c)}</span>
       <span class="conn-target"><span class="host">${esc(c.host)}</span>${c.port ? `<span class="port">${c.port}</span>` : ''}</span>
     </span>
     <button class="icon-btn" data-edit-conn="${c.id}" title="Düzenle">✎</button>
@@ -262,33 +243,28 @@ function renderApps() {
   const eligible = (a) => defs.connections.filter((c) => !c.teamId || c.teamId === a.teamId);
 
   $('#appsPanel').innerHTML = `
-    <div class="panel-head"><h2>${title}</h2>${team ? `<button class="btn small" data-add-app="${team.id}">+ Uygulama ekle</button>` : ''}</div>
-    ${selTeam === UNASSIGNED ? '<p class="hint">Bu uygulamaların ekibi yok. ✎ ile bir ekibe taşıyın.</p>' : ''}
+    <div class="panel-head"><h2>${title}</h2></div>
+    <details class="sk-setup add-help"><summary>Yeni uygulama nasıl eklenir?</summary>
+      <p class="hint">Uygulamalar burada eklenmez. ConnectivityProbe'u uygulamaya ekleyip başlangıçta aşağıdaki satırı çağırın;
+        uygulama ilk açılışta anahtarıyla kendini kaydeder ve "Atanmamış uygulamalar" altında görünür. Sonra ✎ ile ekibine taşıyıp bağlantılarını atayın.</p>
+      <pre>${esc(setupSnippet('uygulama-anahtari', 'Uygulama Adı'))}</pre>
+    </details>
+    ${selTeam === UNASSIGNED ? '<p class="hint">Bu uygulamalar kendini kaydetti ama henüz bir ekibe atanmadı. ✎ ile ekibine taşıyın.</p>' : ''}
     <div class="apps">${apps.length ? apps.map((a) => {
       const attached = a.connectionIds.map((id) => defs.connections.find((c) => c.id === id)).filter(Boolean);
       const free = eligible(a).filter((c) => !a.connectionIds.includes(c.id)).sort(byName);
       return `
         <div class="app-card" data-app="${a.id}">
           <div class="app-head">
-            <div class="grow"><div class="title">${esc(a.name)} ${modeBadge(a.mode)}</div>
-              <div class="url">${esc(a.baseUrl || (a.mode === 'strict' ? 'adres yok · pod\'lar kendini bildirir' : ''))}</div></div>
-            <button class="icon-btn" data-edit-app="${a.id}" title="Düzenle / taşı">✎</button>
+            <div class="grow"><div class="title">${esc(a.name)}</div>
+              <div class="url">anahtar <code>${esc(a.appKey)}</code>${a.registeredAtUtc > '2000' ? ` · kayıt ${dateTimeOf(a.registeredAtUtc)}` : ''}</div></div>
+            <button class="icon-btn" data-copy="${esc(a.appKey)}" title="Anahtarı kopyala">⧉</button>
+            <button class="icon-btn" data-edit-app="${a.id}" title="Adını değiştir / ekibe taşı">✎</button>
             <button class="icon-btn" data-del-app="${a.id}" title="Sil">✕</button>
           </div>
-          ${a.mode === 'strict' ? `
-            <div class="strict-key">
-              <span class="sk-label">Uygulama anahtarı</span>
-              <code class="sk-key">${esc(a.appKey || '')}</code>
-              <button class="icon-btn" data-copy="${esc(a.appKey || '')}" title="Anahtarı kopyala">⧉</button>
-              <button class="icon-btn" data-regen-key="${a.id}" title="Yeni anahtar üret (eskisi hemen geçersiz olur)">↻</button>
-              <details class="sk-setup"><summary>Kurulum bilgisi</summary>
-                <pre>${esc(strictSetup(a))}</pre>
-                <button class="btn small" data-copy="${esc(strictSetup(a))}">Kopyala</button>
-              </details>
-            </div>` : ''}
           <div class="dropzone">
             ${attached.length ? attached.map((c) => `
-              <span class="chip"><span class="name">${esc(c.name)}${cpBadge(c)}${c.teamId ? '' : ' <span class="common" title="Ortak havuzdan">ortak</span>'}</span>
+              <span class="chip"><span class="name">${esc(c.name)}${targetBadge(c)}${c.teamId ? '' : ' <span class="common" title="Ortak havuzdan">ortak</span>'}</span>
                 <span class="target">${esc(targetOf(c))}</span>
                 <button class="icon-btn" data-detach="${a.id}|${c.id}" title="Bu uygulamadan çıkar">✕</button></span>`).join('')
               : '<span class="placeholder">Bağlantıları buraya sürükleyip bırakın</span>'}
@@ -296,7 +272,7 @@ function renderApps() {
               ${free.map((c) => `<option value="${c.id}">${esc(c.name)}${c.teamId ? '' : ' (ortak)'}</option>`).join('')}</select>` : ''}
           </div>
         </div>`;
-    }).join('') : `<div class="empty">${team ? 'Bu ekipte uygulama yok. "+ Uygulama ekle" ile ConnectivityProbe yüklü bir uygulama kaydedin.' : 'Soldan bir ekip seçin.'}</div>`}</div>`;
+    }).join('') : `<div class="empty">${team ? 'Bu ekipte uygulama yok. Kendini kaydeden uygulamalar "Atanmamış uygulamalar" altında görünür; oradan bu ekibe taşıyın.' : 'Soldan bir ekip seçin.'}</div>`}</div>`;
 }
 
 // Bir bağlantıyı bir uygulamayla ilişkilendirir ve tanımları yeniler.
@@ -336,61 +312,44 @@ function wireDragAndDrop() {
   });
 }
 
-// Bağlantı formu. Checkpoint: hedef de ConnectivityProbe kullanıyor mu? İşaretliyse önce telnet, sonra hedefin pod'ları
-// keşfedilir; işaretsizse (DB, Redis, dış API...) yalnızca telnet yapılır ve hedefe hiç HTTP isteği gönderilmez.
+// Bağlantı formu. Her pod bağlantıyı kendi içinden TCP (telnet) ile test eder. Hedef de Monitor'e kayıtlı bir uygulamaysa
+// seçilebilir; o zaman bağlantı satırında hedef uygulamanın pod sayısı ve durumu da görünür.
 const connFields = () => [
   { name: 'name', label: 'Ad', placeholder: 'ör. Ana veritabanı' },
   { name: 'host', label: 'Host veya URL', placeholder: 'sql01, sql01:1433 veya https://orders.example.com/', hint: 'Sunucu adı, IP, sunucu:port ya da tam URL.' },
   { name: 'port', label: 'Port', type: 'number', placeholder: 'ör. 1433', hint: 'Host içinde port varsa veya URL girdiyseniz boş bırakabilirsiniz (https 443, http 80).' },
-  { name: 'usesConnectivityProbe', label: 'Bu hedef de ConnectivityProbe kullanıyor', type: 'checkbox',
-    hint: 'İşaretliyse: önce telnet, açıksa hedefin pod\'ları keşfedilir (hedef URL olarak yazılmalı). İşaretsizse (DB, Redis, dış servis): yalnızca telnet.' },
+  { name: 'targetAppId', label: 'Hedef uygulama (isteğe bağlı)', type: 'select',
+    options: [{ value: '', label: '(yok: veritabanı, kuyruk, dış servis...)' }, ...defs.apps.slice().sort(byName).map((a) => ({ value: a.id, label: a.name }))],
+    hint: 'Hedef de ConnectivityProbe kullanan, Monitor\x27e kayıtlı bir uygulamaysa seçin: bağlantı satırında onun pod sayısı ve durumu da görünür.' },
   { name: 'teamId', label: 'Havuz', type: 'select', options: teamOptions('Ortak havuz (herkes kullanabilir)'),
     hint: 'Ekip havuzundaki bağlantı yalnızca o ekibin uygulamalarına atanabilir.' },
 ];
 
-// Havuzda ve kartlarda ConnectivityProbe kullanan hedefleri ayırt eden rozet.
-const cpBadge = (c) => c.usesConnectivityProbe
-  ? ' <span class="cp" title="Hedef de ConnectivityProbe kullanıyor: telnet + hedefin pod keşfi">CP</span>'
-  : '';
+// Havuzda ve kartlarda hedefi kayıtlı bir uygulama olan bağlantıları gösteren rozet.
+const targetBadge = (c) => {
+  const target = c.targetAppId && defs.apps.find((a) => a.id === c.targetAppId);
+  return target ? ' <span class="cp" title="Hedef uygulama: ' + esc(target.name) + '">→ ' + esc(target.name) + '</span>' : '';
+};
 
 const appFields = () => [
-  { name: 'name', label: 'Ad', placeholder: 'ör. Orders API' },
-  { name: 'mode', label: 'Mod', type: 'select', options: [
-      { value: 'discover', label: 'Discover: Monitor uygulamanın adresine gider' },
-      { value: 'strict', label: 'Strict: her pod kendini bildirir (kesin pod sayısı)' },
-    ],
-    hint: 'Strict: kayıttan sonra bir uygulama anahtarı üretilir; uygulamada ConnectivityProbe:MonitorUrl ve ConnectivityProbe:AppKey verilince her pod tanımları buradan çeker, kendi içinde test eder ve sonucu gönderir.' },
-  { name: 'baseUrl', label: 'Uygulama URL\'si', placeholder: 'https://orders.example.com',
-    hint: 'Discover: zorunlu, pod\'lara dağıtım yapan adres. Strict: isteğe bağlı; verilirse Monitor dışarıdan erişimi de kontrol eder.' },
+  { name: 'name', label: 'Ad', placeholder: 'ör. Orders API', hint: 'İlk kayıtta uygulamanın bildirdiği ad; burada değiştirebilirsiniz. Anahtar değişmez.' },
   { name: 'teamId', label: 'Ekip', type: 'select', options: teamOptions('(atanmamış)'),
     hint: 'Başka ekibe taşınırsa eski ekibin havuzundan atanmış bağlantılar çıkarılır; ortak bağlantılar kalır.' },
 ];
 
 // Form değerlerini API'nin beklediği biçime çevirir (boş port -> null, boş ekip -> null).
 const toConnBody = (v) => ({
-  name: v.name, host: v.host, port: v.port === '' ? null : Number(v.port),
-  usesConnectivityProbe: v.usesConnectivityProbe === true, teamId: v.teamId || null,
+  name: v.name, host: v.host, port: v.port === '' ? null : Number(v.port), teamId: v.teamId || null, targetAppId: v.targetAppId || null,
 });
-const toAppBody = (v) => ({ name: v.name, baseUrl: v.baseUrl, teamId: v.teamId || null, mode: v.mode || 'discover' });
+const toAppBody = (v) => ({ name: v.name, teamId: v.teamId || null });
 
-// Uygulamanın mod rozeti (STRICT / DISCOVER).
-const modeBadge = (mode) => (mode === 'strict'
-  ? '<span class="mode strict" title="Strict: her pod kendini bildirir; pod sayısı kesin">STRICT</span>'
-  : '<span class="mode discover" title="Discover: Monitor uygulamanın adresine gider; pod sayısı olasılıksal">DISCOVER</span>');
-
-// Strict uygulamayı kurmak için gereken ayarlar (Monitor'ün kendi adresiyle).
-const strictSetup = (a) => `dotnet add package ConnectivityProbe
-
-# Ortam değişkenleri (Kubernetes'te env / secret):
-ConnectivityProbe__MonitorUrl=${location.origin}
-ConnectivityProbe__AppKey=${a.appKey}
-
-# ASP.NET Core: Program.cs'te app.UseConnectivityProbe(); veya kodsuz:
-ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe
-
-# İsteğe bağlı (varsayılanlar):
-# ConnectivityProbe__Strict__IntervalSeconds=30      test aralığı (verilmezse Monitor'ünki)
-# ConnectivityProbe__Strict__CommandPollSeconds=10   Monitor'e bildirim sıklığı`;
+// Uygulamaya eklenecek satır (Monitor'ün kendi adresiyle).
+const setupSnippet = (key, name) => `// dotnet add package ConnectivityProbe
+// ASP.NET Core / Worker / konsol: Program.cs'te başlangıçta.  IIS / klasik ASP.NET: Global.asax Application_Start içinde.
+ConnectivityProbe.ConnectivityProbeAgent.Start(
+    monitorUrl: "${location.origin}",
+    appKey: "${key}",
+    appName: "${name}");`;
 
 // Panoya kopyalar (güvenli olmayan bağlamda yedek yöntem).
 async function copyText(text) {
@@ -450,27 +409,20 @@ $('#tab-defs').addEventListener('click', async (e) => {
       const c = defs.connections.find((x) => x.id === d.delConn);
       if (confirm(`"${c.name}" bağlantısı havuzdan ve tüm uygulamalardan silinsin mi?`)) { await api('DELETE', '/api/connections/' + c.id); await afterChange(); }
 
-    // Uygulamalar
-    } else if (d.addApp) {
-      openForm('Uygulama ekle', appFields(), { teamId: d.addApp, mode: 'discover' }, async (v) => { await api('POST', '/api/apps', toAppBody(v)); await afterChange(); });
+    // Uygulamalar (kendini kaydeder; burada yalnızca ad, ekip ve bağlantılar düzenlenir)
     } else if (d.editApp) {
       const a = defs.apps.find((x) => x.id === d.editApp);
-      openForm('Uygulamayı düzenle', appFields(), { ...a, teamId: a.teamId ?? '' }, async (v) => {
-        if ((v.mode || 'discover') !== a.mode && !confirm('Mod değişince bu uygulamanın pod geçmişi sıfırlanır. Devam edilsin mi?')) return;
-        await api('PUT', '/api/apps/' + a.id, toAppBody(v)); await afterChange();
-      });
-    } else if (d.regenKey) {
-      const a = defs.apps.find((x) => x.id === d.regenKey);
-      if (confirm(`"${a.name}" için yeni anahtar üretilecek. Eski anahtar hemen geçersiz olur; pod'lar yeni anahtarla yapılandırılana kadar bildirim gönderemez. Devam edilsin mi?`)) {
-        await api('POST', `/api/apps/${a.id}/regenerate-key`); await afterChange();
-      }
+      openForm('Uygulamayı düzenle', appFields(), { ...a, teamId: a.teamId ?? '' },
+        async (v) => { await api('PUT', '/api/apps/' + a.id, toAppBody(v)); await afterChange(); });
     } else if (d.copy !== undefined) {
       const ok = await copyText(d.copy);
       t.textContent = ok ? '✓' : '!';
       setTimeout(() => { t.textContent = t.dataset.copy.includes('\n') ? 'Kopyala' : '⧉'; }, 1200);
     } else if (d.delApp) {
       const a = defs.apps.find((x) => x.id === d.delApp);
-      if (confirm(`"${a.name}" uygulaması silinsin mi? İzleme durur.`)) { await api('DELETE', '/api/apps/' + a.id); await afterChange(); }
+      if (confirm(`"${a.name}" uygulaması silinsin mi?\n\nPod'ları hâlâ çalışıyorsa bir sonraki bildirimde kendini yeniden kaydeder (ekipsiz ve bağlantısız). Kalıcı olarak kaldırmak için uygulamadan ConnectivityProbe'u da çıkarın.`)) {
+        await api('DELETE', '/api/apps/' + a.id); await afterChange();
+      }
     } else if (d.detach) {
       const [appId, connId] = d.detach.split('|');
       await api('DELETE', `/api/apps/${appId}/connections/${connId}`);
@@ -492,10 +444,12 @@ let modalAppId = null; // detay penceresi açık olan uygulama
 async function refreshMonitor() {
   try {
     const next = await api('GET', '/api/monitor');
-    const json = JSON.stringify(next, (k, v) => (k === 'nextRunUtc' || k === 'running' ? undefined : v));
+    // Her yenilemede değişen zaman alanları karşılaştırmaya girmez; yoksa ekran sürekli baştan çizilirdi.
+    const json = JSON.stringify(next, (k, v) => (k === 'lastRunUtc' || k === 'checkedAtUtc' || k === 'lastSeenUtc' ? undefined : v));
     snap = next;
     // Sonuçlar değişmediyse ekranı yeniden çizmiyoruz (titremeyi ve kayan satırların sıfırlanmasını önler).
     if (json !== lastSnapJson) { lastSnapJson = json; renderMonitor(); }
+    else if (modalAppId) renderModal(); // açık detay penceresinde "son bildirim" zamanları güncel kalsın
     renderMeta();
   } catch { /* sunucuya geçici ulaşılamadı, bir sonraki turda tekrar denenecek */ }
 }
@@ -503,8 +457,7 @@ async function refreshMonitor() {
 // Bir uygulamanın bağlantılarının özeti: kaç tanesi sorunlu (başarısız, test edilemedi veya hedefin bazı pod'larına erişilemedi).
 function connSummary(s) {
   const conns = s.connections || [];
-  const bad = conns.filter((c) => c.callError || c.cells.some((x) => x.fresh
-    && (!x.success || x.targetFailedRequests > 0 || (x.unreachedTargets || []).some((u) => u.confirmed)))).length;
+  const bad = conns.filter((c) => c.cells.some((x) => x.fresh && !x.success)).length;
   return { total: conns.length, bad };
 }
 
@@ -530,7 +483,8 @@ function matches(s, q) {
   if (!q) return true;
   const team = teamOf(appTeamId(s.appId));
   const unit = team ? unitOf(team.unitId) : null;
-  return [s.name, s.baseUrl, team?.name, unit?.name, s.mode].some((x) => lower(x).includes(q));
+  const extra = (s.pods || []).flatMap((p) => [p.appVersion, p.clusterName, podName(p)]);
+  return [s.name, s.appKey, team?.name, unit?.name, ...extra].some((x) => lower(x).includes(q));
 }
 
 // Satır başlığındaki durum sayaçları: ● sağlıklı ● sorunlu ● erişilemiyor.
@@ -540,16 +494,11 @@ function counters(list) {
     .map((st) => `<span class="cnt" title="${STATE_TEXT[st]}"><i class="dot ${st}"></i>${n(st)}</span>`).join('');
 }
 
-// Hedefin, bu uygulamanın pod'larından üst üste birkaç tur erişilemeyen (alarm) pod sayısı.
-const unreachedTargetsOf = (s) => new Set((s.connections || [])
-  .flatMap((c) => c.cells.flatMap((x) => (x.unreachedTargets || []).filter((u) => u.confirmed).map((u) => c.connectionId + '|' + u.instanceId)))).size;
-
-// "Pod listesini sıfırla" ne zaman gösterilir: kendiliğinden silinmeyen bir kayıt varsa, yani uygulamanın eksik bir pod'u
-// veya bağlantı hedeflerinden erişilemeyen bir pod varsa. Sıfırlama ikisini de temizler; mevcut pod'lar yeniden keşfedilir.
-const needsReset = (s) => missingOf(s) > 0 || unreachedTargetsOf(s) > 0;
+// "Pod listesini sıfırla" ne zaman gösterilir: kendiliğinden silinmeyen eksik pod varsa.
+const needsReset = (s) => missingOf(s) > 0;
 
 const resetButton = (s) => (needsReset(s)
-  ? `<button class="nf-btn gray" data-reset-app="${esc(s.appId)}" title="Eksik pod'lar ve erişilemeyen hedef pod'ları kendiliğinden silinmez; sorunu giderdiyseniz (veya pod sayısını bilerek azalttıysanız) buradan temizleyin.">${ICON_RESET}Pod listesini sıfırla</button>`
+  ? `<button class="nf-btn gray" data-reset-app="${esc(s.appId)}" title="Eksik pod'lar kendiliğinden silinmez; sorunu giderdiyseniz (veya pod sayısını bilerek azalttıysanız) buradan temizleyin.">${ICON_RESET}Pod listesini sıfırla</button>`
   : '');
 
 // Kartın sol üst şeridi: en önemli sorun (Netflix'in "Yeni bölüm" şeridi gibi).
@@ -559,17 +508,28 @@ function flagOf(s) {
   if (s.state === 'down') return { cls: '', text: 'ERİŞİLEMİYOR' };
   if (missing) return { cls: '', text: `${missing} POD EKSİK` };
   if (bad) return { cls: 'warn', text: `${bad} BAĞLANTI SORUNLU` };
+  const builds = buildsOf(s).length;
+  if (builds > 1) return { cls: 'warn', text: `${builds} SÜRÜM` };
   if (s.state === 'unknown') return { cls: 'idle', text: 'BEKLİYOR' };
   return null;
 }
 
-// "3 pod", "≥ 4 pod", "erişilemiyor"
-const podsText = (s) => (s.state === 'down' ? 'pod yok' : `${s.converged === false ? '≥ ' : ''}${s.podCount} pod`);
+// "3 pod", "pod yok"
+const podsText = (s) => (s.state === 'down' ? 'pod yok' : `${s.podCount} pod`);
 
 function connsText(s) {
   const { total, bad } = connSummary(s);
   if (!total) return '<span class="muted">bağlantı yok</span>';
   return bad ? `<span class="warn-t">⚠ ${bad}/${total} bağlantı</span>` : `<span class="ok">✓ ${total} bağlantı</span>`;
+}
+
+// Kartın sağ üstünde uygulama sürümü; birden fazla sürüm/build çalışıyorsa sarı "N sürüm".
+function versionBadge(s) {
+  const builds = buildsOf(s);
+  if (!builds.length) return '';
+  return builds.length === 1
+    ? `<span class="tile-ver" title="Uygulama sürümü · build">${esc(builds[0])}</span>`
+    : `<span class="tile-ver mixed" title="${esc(builds.join(', '))}">${builds.length} sürüm</span>`;
 }
 
 // Bir uygulama kartı.
@@ -585,11 +545,11 @@ function tile(s) {
     <button class="tile ${s.state}" data-open-app="${esc(s.appId)}" style="--h:${hueOf(s.name)}" title="${esc(s.message || STATE_TEXT[s.state])}">
       <div class="tile-art"><span class="mono">${esc(monogram(s.name))}</span></div>
       ${flag ? `<span class="flag ${flag.cls}">${flag.text}</span>` : ''}
-      <span class="tile-mode">${modeBadge(s.mode)}</span>
+      ${versionBadge(s)}
       <div class="tile-body">
         <span class="tile-name">${esc(s.name)}</span>
         <div class="tile-line"><span class="st ${s.state}">${STATE_TEXT[s.state]}</span><span class="box">${podsText(s)}</span>${connsText(s)}</div>
-        <div class="tile-more">${esc(team ? team.name + ' · ' : '')}${esc(s.baseUrl || 'adres yok')} · ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}
+        <div class="tile-more">${esc(team ? team.name + ' · ' : '')}${esc(s.appKey)} · ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}
           ${hist ? `<div class="tile-hist">${hist}</div>` : ''}</div>
       </div>
       <div class="tile-bar"><i style="width:${health}%"></i></div>
@@ -730,8 +690,9 @@ function renderMonitor() {
   // Billboard yokken üst menü sonuçların üstünde saydam kalmasın.
   $('#topbar').classList.toggle('scrolled', list.classList.contains('searching') || window.scrollY > 20);
 
-  // Detay penceresi açıksa onu da yeni sonuçlarla güncelliyoruz.
+  // Detay penceresi ve Sürümler sekmesi açıksa onları da yeni sonuçlarla güncelliyoruz.
   if (modalAppId) renderModal();
+  if (tab === 'versions') renderVersions();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -752,18 +713,19 @@ function renderModal() {
 
   const team = teamOf(appTeamId(s.appId));
   const unit = team ? unitOf(team.unitId) : null;
-  const missing = missingOf(s);
   const { total, bad } = connSummary(s);
+  const builds = buildsOf(s);
   const msgClass = s.state === 'down' ? 'bad' : s.state === 'degraded' ? 'warn' : '';
   const hist = s.history || [];
   const maxPods = Math.max(1, ...hist.map((h) => h.podCount));
+  const clusters = [...new Set((s.pods || []).map((p) => p.clusterName || '?'))];
 
   $('#appModalBody').innerHTML = `
     <div class="m-hero">
       <div class="m-art ${s.state}" style="--h:${hueOf(s.name)}"><span class="mono">${esc(monogram(s.name))}</span></div>
       <button class="m-close" data-close-modal aria-label="Kapat">✕</button>
       <div class="m-hero-text">
-        <div class="m-kicker">${modeBadge(s.mode)} ${esc([unit?.name, team?.name].filter(Boolean).join(' · ') || 'Atanmamış')}</div>
+        <div class="m-kicker">${esc([unit?.name, team?.name].filter(Boolean).join(' · ') || 'Atanmamış')}</div>
         <h2>${esc(s.name)}</h2>
         <div class="m-actions">
           <button class="nf-btn white" data-run>${ICON_PLAY}Şimdi test et</button>
@@ -777,21 +739,20 @@ function renderModal() {
           <div class="m-meta">
             <span class="st ${s.state}">${STATE_TEXT[s.state]}</span>
             <span class="box">${podsText(s)}</span>
-            ${s.mode === 'strict' ? '<span class="muted" title="Her pod kendini bildirdiği için pod sayısı kesindir">kesin sayı</span>'
-              : s.confidence != null ? `<span class="muted" title="Başka pod olmama olasılığı">%${Math.round(s.confidence * 100)} güven</span>` : ''}
-            <span class="muted">son kontrol ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}</span>
+            ${builds.length === 1 ? `<span class="box">${esc(builds[0])}</span>` : builds.length > 1 ? `<span class="warn-t">${builds.length} farklı sürüm</span>` : ''}
+            <span class="muted">güncellendi ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}</span>
           </div>
           ${s.message ? `<p class="m-msg ${msgClass}">${esc(s.message)}</p>` : ''}
-          ${needsReset(s) ? '<p class="msg">Eksik pod\'lar ve erişilemeyen hedef pod\'ları kendiliğinden silinmez; sorunu giderdiyseniz veya pod sayısını bilerek azalttıysanız "Pod listesini sıfırla" ile temizleyin.</p>' : ''}
+          ${needsReset(s) ? '<p class="msg">Eksik pod\'lar kendiliğinden silinmez; sorunu giderdiyseniz veya pod sayısını bilerek azalttıysanız "Pod listesini sıfırla" ile temizleyin.</p>' : ''}
           ${hist.length ? `<div class="m-history">${hist.map((h) => `<i class="${h.state}" style="height:${Math.max(12, (h.podCount / maxPods) * 100)}%"
               title="${timeOf(h.atUtc)} · ${STATE_TEXT[h.state] || h.state} · ${h.podCount} pod"></i>`).join('')}</div>
-            <div class="m-history-label">Son ${hist.length} tur · çubuk yüksekliği pod sayısı</div>` : ''}
+            <div class="m-history-label">Son ${hist.length} test aralığı · çubuk yüksekliği pod sayısı</div>` : ''}
         </div>
         <div class="m-side">
-          <div><span>Mod: </span>${s.mode === 'strict' ? 'Strict (pod\'lar kendini bildirir)' : 'Discover (Monitor uygulamaya gider)'}</div>
-          <div><span>URL: </span>${esc(s.baseUrl || '–')}</div>
+          <div><span>Anahtar: </span><code>${esc(s.appKey)}</code></div>
           <div><span>Birim: </span>${esc(unit?.name ?? '–')}</div>
           <div><span>Ekip: </span>${esc(team?.name ?? 'Atanmamış')}</div>
+          <div><span>Cluster: </span>${esc(clusters.join(', ') || '–')}</div>
           <div><span>Bağlantılar: </span>${total}${bad ? ` <span class="warn-t">(${bad} sorunlu)</span>` : ''}</div>
           <div><span>Test aralığı: </span>${snap.intervalSeconds} sn</div>
         </div>
@@ -802,41 +763,68 @@ function renderModal() {
   dlg.scrollTop = keep;
 }
 
-// Pod listesi, Netflix'in bölüm listesi gibi:
-//   up          -> bu turda cevap verdi (normal)
-//   unconfirmed -> bu turda denk gelinmedi; rastgele dağıtım yüzünden olabilir, alarm değil (soluk)
-//   missing     -> üst üste birkaç tur görünmedi ve yerine yeni pod gelmedi (kırmızı, alarm)
+// Pod listesi cluster'a göre gruplanır (Netflix'in bölüm listesi gibi):
+//   up          -> bildirim gönderiyor
+//   unconfirmed -> bildirimi gecikti (alarm değil)
+//   missing     -> MissingAfterCycles test aralığı boyunca bildirim yok (kırmızı, alarm)
+// Grup başlığında o cluster'daki pod sayısı ve çalışan sürümler; uygulamada birden fazla sürüm varsa azınlıktakiler sarı.
 function episodesHtml(s) {
   if (!s.pods?.length) return '';
-  const strict = s.mode === 'strict';
-  // Strict'te "görülmedi" rastlantı değil, bildirimin gecikmesidir.
-  const label = { up: 'ÇALIŞIYOR', unconfirmed: strict ? 'BİLDİRİM GECİKTİ' : 'BU TURDA GÖRÜLMEDİ', missing: 'EKSİK' };
-  return `<h3 class="m-sec">Pod'lar <span>${s.pods.length}</span></h3>
-    <div class="episodes">${s.pods.map((p, i) => {
-      const desc = p.state === 'up'
-        ? esc((p.addresses || []).join(', ')) + (strict ? ` · son bildirim ${agoOf(p.lastSeenUtc)}` : '')
-        : p.state === 'missing'
-          ? (strict ? `${durationOf(p.lastSeenUtc)} bildirim göndermiyor` : `${p.missedCycles} turdur cevap vermiyor`) + ` · son görülme ${timeOf(p.lastSeenUtc)}`
-          : strict
-            ? `Bildirimi gecikti · son bildirim ${timeOf(p.lastSeenUtc)}`
-            : `Bu turda denk gelinmedi (alarm değil) · son görülme ${timeOf(p.lastSeenUtc)}`;
-      const kvs = [...(p.probeVersion ? [['ConnectivityProbe', p.probeVersion]] : []), ...Object.entries(p.details || {}).slice(0, 6)]
-        .map(([k, v]) => `<span class="kv"><b>${esc(k)}</b> ${esc(v)}</span>`).join('');
+  const label = { up: 'ÇALIŞIYOR', unconfirmed: 'BİLDİRİM GECİKTİ', missing: 'EKSİK' };
+  const builds = buildsOf(s);
+  // En çok pod'da çalışan sürüm "ana" sürüm; diğerleri (eski/yeni) vurgulanır.
+  const count = (b) => s.pods.filter((p) => p.state === 'up' && versionLabel(p) === b).length;
+  const main = builds.slice().sort((a, b) => count(b) - count(a))[0];
+
+  const groups = new Map();
+  for (const p of s.pods) {
+    const key = p.clusterKey || '?';
+    if (!groups.has(key)) groups.set(key, { name: p.clusterName || 'Bilinmeyen cluster', pods: [] });
+    groups.get(key).pods.push(p);
+  }
+
+  let n = 0;
+  return `<h3 class="m-sec">Pod'lar <span>${s.pods.length} pod · ${groups.size} cluster</span></h3>
+    ${[...groups.values()].map((g) => {
+      const versions = [...new Set(g.pods.filter((p) => p.state === 'up').map(versionLabel))];
       return `
-        <div class="ep ${p.state}">
-          <div class="ep-num">${i + 1}</div>
-          <div class="ep-thumb" style="--h:${hueOf(p.instanceId)}">${i + 1}</div>
-          <div>
-            <div class="ep-title">${esc(p.details?.POD_NAME || p.machineName)}<span class="pid">${shortId(p.instanceId)}</span><span class="ep-state ${p.state}">${label[p.state] || p.state}</span></div>
-            <div class="ep-desc">${desc}</div>
-            ${kvs ? `<div class="kvs">${kvs}</div>` : ''}
-          </div>
-          <div class="ep-time">${p.startedAtUtc ? 'başladı ' + timeOf(p.startedAtUtc) : ''}</div>
-        </div>`;
-    }).join('')}</div>`;
+      <div class="ep-cluster">
+        <b>${esc(g.name)}</b>
+        <span>${g.pods.filter((p) => p.state === 'up').length}/${g.pods.length} pod</span>
+        ${versions.map((v) => `<span class="ver ${builds.length > 1 && v !== main ? 'odd' : ''}">${esc(v)}</span>`).join('')}
+      </div>
+      <div class="episodes">${g.pods.map((p) => {
+        n++;
+        const odd = builds.length > 1 && p.state === 'up' && versionLabel(p) !== main;
+        const desc = p.state === 'up'
+          ? esc((p.addresses || []).join(', ')) + ` · son bildirim ${agoOf(p.lastSeenUtc)}`
+          : p.state === 'missing'
+            ? `${durationOf(p.lastSeenUtc)} bildirim göndermiyor · son görülme ${timeOf(p.lastSeenUtc)}`
+            : `Bildirimi gecikti · son bildirim ${timeOf(p.lastSeenUtc)}`;
+        const kvs = [
+          ['sürüm', versionLabel(p)],
+          ...(p.buildDateUtc ? [['build', dateTimeOf(p.buildDateUtc)]] : []),
+          ...(p.namespace ? [['namespace', p.namespace]] : []),
+          ['ConnectivityProbe', p.probeVersion || '?'],
+          ...Object.entries(p.details || {}).filter(([k]) => k !== 'POD_NAME' && k !== 'HOSTNAME').slice(0, 4),
+        ].map(([k, v]) => `<span class="kv ${k === 'sürüm' && odd ? 'odd' : ''}"><b>${esc(k)}</b> ${esc(v)}</span>`).join('');
+        return `
+          <div class="ep ${p.state}">
+            <div class="ep-num">${n}</div>
+            <div class="ep-thumb" style="--h:${hueOf(p.instanceId)}">${n}</div>
+            <div>
+              <div class="ep-title">${esc(podName(p))}<span class="pid">${shortId(p.instanceId)}</span><span class="ep-state ${p.state}">${label[p.state] || p.state}</span>
+                ${odd ? '<span class="ep-state odd">FARKLI SÜRÜM</span>' : ''}</div>
+              <div class="ep-desc">${desc}</div>
+              <div class="kvs">${kvs}</div>
+            </div>
+            <div class="ep-time">${p.startedAtUtc ? 'başladı ' + dateTimeOf(p.startedAtUtc) : ''}</div>
+          </div>`;
+      }).join('')}</div>`;
+    }).join('')}`;
 }
 
-// Satırlar: ilişkilendirilmiş bağlantılar, sütunlar: pod'lar. Hücre: o pod'un bağlantıyı test sonucu.
+// Satırlar: atanmış bağlantılar, sütunlar: pod'lar. Hücre: o pod'un bağlantıyı kendi içinden TCP ile test ettiği son sonuç.
 function matrixHtml(s) {
   const def = defs.apps.find((a) => a.id === s.appId);
   const hasConns = (def?.connectionIds?.length ?? 0) > 0;
@@ -844,103 +832,46 @@ function matrixHtml(s) {
   if (!s.connections?.length) return s.state === 'down' ? '' : '<p class="msg">Bağlantı sonuçları bekleniyor…</p>';
 
   const pods = s.pods || [];
-  // Eksik pod'un sütun başlığı kırmızı: o pod cevap vermediği için bağlantılarını test edemiyoruz.
-  const head = pods.map((p) => `<th class="${p.state === 'missing' ? 'missing' : ''}">${esc(p.details?.POD_NAME || p.machineName)}<span class="pid">${shortId(p.instanceId)}${p.state === 'missing' ? ' · eksik' : ''}</span></th>`).join('');
+  // Eksik pod'un sütun başlığı kırmızı: o pod bildirim göndermediği için bağlantılarını test edemiyor.
+  const head = pods.map((p) => `<th class="${p.state === 'missing' ? 'missing' : ''}">${esc(podName(p))}<span class="pid">${esc(p.clusterName || '')} · ${shortId(p.instanceId)}${p.state === 'missing' ? ' · eksik' : ''}</span></th>`).join('');
 
   const rows = s.connections.map((c) => {
     const ips = [...new Set(c.cells.flatMap((x) => x.ipResults.map((r) => r.address)))];
-    // Hata, eski (soluk) sonuçlar olsa bile satırda görünsün; aksi halde "test edilemiyor" durumu gözden kaçar.
-    const connDef = defs.connections.find((x) => x.id === c.connectionId);
-    const rowHead = `<td class="rowhead"><span class="name">${esc(c.name)}${connDef ? cpBadge(connDef) : ''}</span><span class="target">${esc(c.target)}</span>
-      ${ips.length ? `<span class="ips">IP: ${esc(ips.join(', '))}</span>` : ''}
-      ${c.callError && c.cells.length ? `<span class="rowerr">⚠ ${esc(c.callError)}</span>` : ''}</td>`;
-
-    // Probe çağrısının kendisi başarısızsa satırın tamamında hatayı gösteriyoruz.
-    if (c.callError && !c.cells.length) return `<tr>${rowHead}<td class="callerr" colspan="${Math.max(1, pods.length)}">${esc(c.callError)}</td></tr>`;
+    // Hedef de Monitor'e kayıtlı bir uygulamaysa onun pod sayısı ve durumu.
+    const target = c.targetAppId && (snap?.apps || []).find((a) => a.appId === c.targetAppId);
+    const targetInfo = target
+      ? `<span class="target-app"><i class="dot ${target.state}"></i>hedef: ${esc(target.name)} · ${target.podCount} pod · ${STATE_TEXT[target.state]}</span>` : '';
+    const rowHead = `<td class="rowhead"><span class="name">${esc(c.name)}</span><span class="target">${esc(c.target)}</span>
+      ${ips.length ? `<span class="ips">IP: ${esc(ips.join(', '))}</span>` : ''}${targetInfo}</td>`;
 
     const cells = pods.map((p) => {
       const cell = c.cells.find((x) => x.instanceId === p.instanceId);
 
-      // Pod eksikse (üst üste birkaç tur cevap vermedi) eski başarılı sonucu yeşil göstermek yanıltıcı olur: pod çalışmıyor,
-      // bu bağlantıyı da kullanamıyor. Kırmızı gösteriyoruz; son bilinen sonuç yalnızca ipucunda.
+      // Pod eksikse eski başarılı sonucu yeşil göstermek yanıltıcı olur: pod çalışmıyor, bu bağlantıyı da kullanamıyor.
       if (p.state === 'missing') {
         const lastKnown = cell
           ? `Son bilinen sonuç (${timeOf(cell.checkedAtUtc)}): ${cell.success ? 'başarılı, ' + cell.elapsedMs + ' ms' : (cell.error || 'başarısız')}`
           : 'Bu pod için daha önce sonuç alınmadı';
-        return `<td class="cell fail" title="${esc(`Pod ${p.missedCycles} turdur cevap vermiyor (son görülme: ${timeOf(p.lastSeenUtc)}).\n${lastKnown}`)}">`
-          + `✗<span class="reach">Pod cevap vermiyor</span><span class="since">${durationOf(p.lastSeenUtc)} görünmüyor</span></td>`;
+        return `<td class="cell fail" title="${esc(`Pod ${durationOf(p.lastSeenUtc)} bildirim göndermiyor (son: ${timeOf(p.lastSeenUtc)}).\n${lastKnown}`)}">`
+          + `✗<span class="reach">Pod bildirim göndermiyor</span><span class="since">${durationOf(p.lastSeenUtc)}</span></td>`;
       }
 
-      if (!cell) return '<td class="cell none" title="Bu turda bu pod\'a denk gelinmedi">–</td>';
+      if (!cell) return '<td class="cell none" title="Bu pod henüz test sonucu göndermedi">–</td>';
       const tip = [
-        cell.fresh ? '' : 'Bu turda test edilemedi, son bilinen sonuç (' + timeOf(cell.checkedAtUtc) + ')',
+        cell.fresh ? '' : 'Son bilinen sonuç (' + timeOf(cell.checkedAtUtc) + ')',
         cell.reachedAddress ? 'Ulaşılan IP: ' + cell.reachedAddress : '',
         ...cell.ipResults.map((r) => `${r.address}: ${r.success ? 'ok ' + r.elapsedMs + ' ms' : r.error}`),
         cell.error ? 'Hata: ' + cell.error : '',
         !cell.success && cell.failingSinceUtc ? `Başarısız: ${dateTimeOf(cell.failingSinceUtc)} tarihinden beri` : '',
         !cell.success ? (cell.lastSuccessUtc ? `Son başarılı test: ${dateTimeOf(cell.lastSuccessUtc)}` : 'Monitor açıldığından beri hiç başarılı olmadı') : '',
       ].filter(Boolean).join('\n');
-      // Başarısız: nedeni (timeout, reddedildi, ConnectivityProbe yok...) ve ne zamandır başarısız olduğunu yazıyoruz.
+
       if (!cell.success) {
         return `<td class="cell fail ${cell.fresh ? '' : 'stale'}" title="${esc(tip)}">✗<span class="reach">${esc(cell.error || 'başarısız')}</span>`
           + (cell.failingSinceUtc ? `<span class="since">${durationOf(cell.failingSinceUtc)} erişilemiyor</span>` : '') + '</td>';
       }
-
-      // Yalnızca telnet (hedef ConnectivityProbe kullanmıyor).
-      if (!cell.targetKind) {
-        return `<td class="cell ok ${cell.fresh ? '' : 'stale'}" title="${esc(tip)}">✓<span class="ms">${cell.elapsedMs} ms</span>`
-          + `${cell.reachedAddress ? `<span class="reach">${esc(cell.reachedAddress)}</span>` : ''}</td>`;
-      }
-
-      // ConnectivityProbe kullanan hedef: bu pod'un kendi içinden eriştiği hedef pod'ları ve erişemedikleri.
-      // Erişilemeyenler iki kaynaktan gelir:
-      //   1) Monitor'ün bu bağlantı için hatırladığı hedef pod'ları (sunucu): hedef Monitor'de kayıtlı olmasa bile bilinir,
-      //      üst üste birkaç tur erişilemeyenler "ne zamandır" bilgisiyle gelir.
-      //   2) Hedef Monitor'de ayrıca kayıtlıysa orada bilinen pod listesi: fark hemen (ilk turda) görünür.
-      const reached = cell.targetPods || [];
-      const reachedIds = new Set(reached.map((x) => x.instanceId));
-      const remembered = cell.unreachedTargets || [];
-      const confirmed = remembered.filter((u) => u.confirmed);
-      const pending = remembered.filter((u) => !u.confirmed);
-      const expected = expectedPodsOf(connDef || c); // null: hedef Monitor'de kayıtlı değil
-      const notReached = [...confirmed];
-      for (const x of expected || []) {
-        if (reachedIds.has(x.instanceId) || notReached.some((u) => u.instanceId === x.instanceId)) continue;
-        const known = pending.find((u) => u.instanceId === x.instanceId); // sunucu da biliyorsa süresini kullanıyoruz
-        notReached.push(known || { instanceId: x.instanceId, machineName: x.machineName, podName: x.details?.POD_NAME });
-      }
-      const partial = notReached.length > 0 || cell.targetFailedRequests > 0;
-      const total = expected ? Math.max(expected.length, reached.length + notReached.length) : reached.length + notReached.length;
-      const countText = notReached.length || expected
-        ? `${reached.length}/${total} pod'a erişildi`
-        : `${reached.length} pod'a erişildi${cell.targetCountConverged === false ? ' (en az)' : ''}`;
-      // Aynı ad birden fazla pod'da varsa ayırt etmek için kısa kimlik ekliyoruz (pod adı varsa o kullanılır).
-      const allPods = [...reached, ...notReached];
-      const label = (x) => x.podName || podLabel(x, allPods);
-      const names = (list) => esc(list.slice(0, 3).map(label).join(', ')) + (list.length > 3 ? ` +${list.length - 3}` : '');
-
-      const targetTip = [
-        `Bu pod kendi içinden hedefin ${reached.length} pod'una erişti:`,
-        ...reached.map((x) => `  ✓ ${label(x)} (${shortId(x.instanceId)}) ${x.addresses.join(', ')} · ${x.hits} cevap`),
-        ...(notReached.length ? ['Erişilemeyen pod\'lar:', ...notReached.map((x) => `  ✗ ${label(x)} (${shortId(x.instanceId)})`
-          + (x.sinceUtc ? ` · ${dateTimeOf(x.sinceUtc)} tarihinden beri (${x.missedCycles} tur)` : '')
-          + (x.sinceUtc ? (x.lastReachedUtc ? ` · son erişim ${dateTimeOf(x.lastReachedUtc)}` : ' · bu pod hiç erişemedi') : ''))] : []),
-        ...pending.filter((u) => !notReached.includes(u)).map((u) => `  … ${label(u)}: ${u.missedCycles} turdur görülmedi (henüz alarm değil, rastlantı olabilir)`),
-        cell.targetFailedRequests
-          ? `${cell.targetFailedRequests} istek cevap alamadı: load balancer bu istekleri cevap vermeyen bir pod'a göndermiş olabilir.`
-          : '',
-      ].filter(Boolean).join('\n');
-
-      // Erişilemeyen her pod ayrı satırda: adı ve ne zamandır erişilemediği.
-      const unreachedHtml = notReached.slice(0, 4).map((x) => `<span class="reach bad-line">✗ ${esc(label(x))}`
-        + (x.sinceUtc ? `<span class="since">${durationOf(x.sinceUtc)} erişilemiyor</span>` : '') + '</span>').join('')
-        + (notReached.length > 4 ? `<span class="reach">+${notReached.length - 4} pod daha</span>` : '');
-
-      const body = `${partial ? '⚠' : '✓'}<span class="ms">${countText} · ${cell.elapsedMs} ms</span>`
-        + `<span class="reach">${names(reached)}</span>`
-        + unreachedHtml
-        + (cell.targetFailedRequests && !notReached.length ? `<span class="reach warn">${cell.targetFailedRequests} istek cevap alamadı</span>` : '');
-      return `<td class="cell ${partial ? 'warn' : 'ok'} ${cell.fresh ? '' : 'stale'}" title="${esc([tip, targetTip].filter(Boolean).join('\n'))}">${body}</td>`;
+      return `<td class="cell ok ${cell.fresh ? '' : 'stale'}" title="${esc(tip)}">✓<span class="ms">${cell.elapsedMs} ms</span>`
+        + `${cell.reachedAddress ? `<span class="reach">${esc(cell.reachedAddress)}</span>` : ''}</td>`;
     }).join('');
 
     return `<tr>${rowHead}${cells}</tr>`;
@@ -950,6 +881,63 @@ function matrixHtml(s) {
     <div class="matrix-wrap"><table class="matrix"><thead><tr><th>Bağlantı</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Sürümler sekmesi: hangi cluster'da hangi uygulamanın hangi sürümü kaç pod'da çalışıyor
+// ---------------------------------------------------------------------------------------------
+function renderVersions() {
+  if (!snap) return;
+  const apps = (snap.apps || []).filter((a) => (a.pods || []).length).slice().sort(byName);
+  const clusters = (snap.clusters || []).filter((c) => apps.some((a) => a.pods.some((p) => p.clusterKey === c.key)));
+  const mixedApps = apps.filter((a) => buildsOf(a).length > 1).length;
+
+  $('#tab-versions').innerHTML = `
+    <div class="v-head">
+      <h2>Ortamlar ve sürümler</h2>
+      <p class="hint">Pod'lar bulundukları cluster'a göre kendiliğinden gruplanır (Kubernetes cluster sertifikası; Kubernetes dışında bildirimin
+        geldiği ağ adresi). Cluster adlarını ✎ ile değiştirebilirsiniz. Bir uygulamada birden fazla sürüm/build çalışıyorsa azınlıktaki sarıyla işaretlenir.</p>
+      ${mixedApps ? `<p class="warn-t">${mixedApps} uygulamada birden fazla sürüm çalışıyor.</p>` : ''}
+    </div>
+    <div class="v-clusters">${clusters.length ? clusters.map((c) => `
+      <div class="v-cluster">
+        <div class="grow"><b>${esc(c.name)}</b><span class="muted"> ${c.pods} pod · ${c.apps} uygulama</span>
+          <div class="pid">${esc(c.key)}</div></div>
+        <button class="icon-btn" data-rename-cluster="${esc(c.key)}" title="Adını değiştir">✎</button>
+      </div>`).join('') : '<div class="empty">Henüz pod bildirimi yok.</div>'}</div>
+    ${apps.length && clusters.length ? `
+    <div class="matrix-wrap"><table class="matrix v-table">
+      <thead><tr><th>Uygulama</th>${clusters.map((c) => `<th>${esc(c.name)}</th>`).join('')}</tr></thead>
+      <tbody>${apps.map((a) => {
+        const builds = buildsOf(a);
+        const count = (b) => a.pods.filter((p) => p.state === 'up' && versionLabel(p) === b).length;
+        const main = builds.slice().sort((x, y) => count(y) - count(x))[0];
+        return `<tr>
+          <td class="rowhead"><span class="name">${esc(a.name)}</span><span class="target">${esc(a.appKey)}</span>
+            ${builds.length > 1 ? `<span class="warn-t">${builds.length} farklı sürüm</span>` : ''}</td>
+          ${clusters.map((c) => {
+            const pods = a.pods.filter((p) => p.clusterKey === c.key);
+            if (!pods.length) return '<td class="cell none">–</td>';
+            const byVersion = new Map();
+            for (const p of pods) {
+              const v = versionLabel(p);
+              const e = byVersion.get(v) || { up: 0, other: 0 };
+              if (p.state === 'up') e.up++; else e.other++;
+              byVersion.set(v, e);
+            }
+            return `<td>${[...byVersion.entries()].map(([v, e]) =>
+              `<div class="ver ${builds.length > 1 && v !== main ? 'odd' : ''}" title="${e.up} pod çalışıyor${e.other ? ', ' + e.other + ' pod eksik/gecikmiş' : ''}">${esc(v)} <b>×${e.up}</b>${e.other ? ` <span class="bad">+${e.other}</span>` : ''}</div>`).join('')}</td>`;
+          }).join('')}
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>` : ''}`;
+}
+
+$('#tab-versions').addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-rename-cluster]');
+  if (!t) return;
+  const c = (snap?.clusters || []).find((x) => x.key === t.dataset.renameCluster);
+  openForm('Cluster adını değiştir', [{ name: 'name', label: 'Ad', placeholder: 'ör. Prod İstanbul', hint: 'Anahtar: ' + c.key }], c,
+    async (v) => { await api('PUT', '/api/clusters/' + encodeURIComponent(c.key), v); lastSnapJson = ''; await refreshMonitor(); renderVersions(); });
+});
 
 // ---------------------------------------------------------------------------------------------
 // Başlangıç ve olaylar

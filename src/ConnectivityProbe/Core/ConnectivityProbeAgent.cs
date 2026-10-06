@@ -3,24 +3,28 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace ConnectivityProbe
 {
-    /// <summary>Strict mod: pod'un Monitor'e gönderdiği bildirim (her CommandPollSeconds'ta bir; test yapıldıysa sonuçlarla).</summary>
+    /// <summary>Pod'un Monitor'e gönderdiği bildirim (her PollSeconds'ta bir; test yapıldıysa sonuçlarla).</summary>
     public sealed class AgentReport
     {
-        /// <summary>Bildirimi gönderen pod'un kimliği (identity ucunun döndüğüyle aynı).</summary>
-        public InstanceIdentity Identity { get; set; } = new InstanceIdentity();
-        /// <summary>Pod'un Monitor'e ne sıklıkla bildirim gönderdiği (sn); Monitor pod'un canlılığını buna göre değerlendirir.</summary>
+        /// <summary>Uygulama adı: Monitor bu anahtarı ilk kez görüyorsa uygulamayı bu adla kaydeder.</summary>
+        public string AppName { get; set; } = "";
+        /// <summary>Bildirimi gönderen pod'un kimliği ve uygulamanın sürüm bilgisi.</summary>
+        public PodIdentity Pod { get; set; } = new PodIdentity();
+        /// <summary>Pod'un bildirim aralığı (sn); Monitor pod'un canlılığını buna göre değerlendirir.</summary>
         public int PollSeconds { get; set; }
         /// <summary>Son test turunun sonuçları; bu bildirimde test sonucu yoksa null.</summary>
         public AgentRun? Run { get; set; }
     }
 
-    /// <summary>Strict mod: bir pod'un bir test turu.</summary>
+    /// <summary>Bir pod'un bir test turu.</summary>
     public sealed class AgentRun
     {
         public DateTime StartedAtUtc { get; set; }
@@ -28,53 +32,55 @@ namespace ConnectivityProbe
         public List<AgentResult> Results { get; set; } = new List<AgentResult>();
     }
 
-    /// <summary>Strict mod: bir bağlantının bu pod'daki test sonucu (discover ucunun döndüğü raporla aynı).</summary>
+    /// <summary>Bir bağlantının bu pod'daki TCP (telnet) test sonucu.</summary>
     public sealed class AgentResult
     {
         public string ConnectionId { get; set; } = "";
-        public DiscoverReport? Report { get; set; }
+        /// <summary>Telnet raporu: ismin çözüldüğü her IP ve isim üzerinden yapılan bağlantının sonucu.</summary>
+        public ProbeReport? Tcp { get; set; }
         /// <summary>Test yapılamadıysa nedeni (ör. tanımdaki host geçersiz).</summary>
         public string? Error { get; set; }
     }
 
     /// <summary>
-    /// Strict mod: uygulamanın her pod'unda arka planda çalışan iş. <see cref="ConnectivityProbeOptions.MonitorUrl"/> ve
-    /// <see cref="ConnectivityProbeOptions.AppKey"/> verildiğinde kendiliğinden başlar (ASP.NET Core, IIS); diğer uygulamalarda
-    /// <c>ConnectivityProbeAgent.Start()</c> ile başlatılır.
+    /// ConnectivityProbe agent'ı: uygulamanın her pod'unda arka planda çalışır.
     /// <list type="number">
-    /// <item>Her <see cref="ConnectivityProbeOptions.StrictPollSeconds"/> saniyede Monitor'e bildirim gönderir ("bu pod yaşıyor");
-    /// yanıtta uygulamaya ait bağlantı tanımlarını ve test aralığını alır.</item>
+    /// <item>Başlarken ve her <see cref="ConnectivityProbeOptions.PollSeconds"/> saniyede Monitor'e bildirim gönderir. Monitor bu
+    /// anahtarı ilk kez görüyorsa uygulamayı kendiliğinden kaydeder. Yanıtta uygulamaya atanmış bağlantılar ve test aralığı gelir.</item>
     /// <item>Test zamanı geldiğinde (veya Monitor'de "Şimdi test et"e basıldığında) her bağlantıyı bu pod'un içinden test eder
-    /// (discover ucuyla aynı mantık) ve sonuçları hemen gönderir.</item>
-    /// <item>Uygulama düzgün kapanırken Monitor'e "kapanıyorum" bildirir; böylece deploy / scale-down alarm üretmez.</item>
+    /// (TCP / telnet) ve sonuçları hemen gönderir.</item>
+    /// <item>Süreç kapanırken Monitor'e "kapanıyorum" bildirir; deploy / scale-down alarm üretmez.</item>
     /// </list>
-    /// İstekler load balancer'dan geçmediği için her pod kendini bildirir: pod sayısı ve her pod'un sonucu kesindir.
+    /// Monitor'e ulaşılamazsa uygulama hiçbir şekilde etkilenmez; konsola kısa bir İngilizce mesaj yazılır ve tekrar denenir.
     /// </summary>
     public sealed class ConnectivityProbeAgent : IDisposable
     {
-        /// <summary>Monitor'deki bildirim ucu.</summary>
-        public const string ReportPath = "/api/agent/v1/report";
+        /// <summary>Monitor'deki bildirim (ve kayıt) ucu.</summary>
+        public const string ReportPath = "/api/agent/v2/report";
         /// <summary>Monitor'deki "kapanıyorum" ucu.</summary>
-        public const string GoodbyePath = "/api/agent/v1/goodbye";
-
-        /// <summary>Aynı anda test edilen en fazla bağlantı (bir pod'un hedeflere ani yük bindirmemesi için).</summary>
-        private const int MaxParallelTests = 4;
+        public const string GoodbyePath = "/api/agent/v2/goodbye";
 
         private static readonly object StartLock = new object();
         private static ConnectivityProbeAgent? _current;
 
         private readonly ConnectivityProbeOptions _options;
+        private readonly Assembly? _app;
         private readonly HttpClient _http;
         private readonly CancellationTokenSource _stop = new CancellationTokenSource();
         private readonly Task _loop;
         private int _stopped;
 
-        private ConnectivityProbeAgent(ConnectivityProbeOptions options)
+        private ConnectivityProbeAgent(ConnectivityProbeOptions options, Assembly? app)
         {
             _options = options;
-            // Monitor'e giden istekler için tek bir istemci (bağlantı yeniden kullanılır; burada pod seçimi söz konusu değil).
+            _app = app;
+            // Monitor'e giden istekler için tek bir istemci (bağlantı yeniden kullanılır).
             _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            Log(ProbeLogLevel.Information, "ConnectivityProbe strict mode started, reporting to " + options.MonitorUrl);
+
+            // Süreç kapanırken (Kubernetes SIGTERM, Ctrl+C, servis durdurma) ve IIS uygulamayı geri dönüştürürken Monitor'e haber ver.
+            AppDomain.CurrentDomain.ProcessExit += OnShutdown;
+            AppDomain.CurrentDomain.DomainUnload += OnShutdown;
+
             _loop = Task.Run(() => LoopAsync(_stop.Token));
         }
 
@@ -87,72 +93,129 @@ namespace ConnectivityProbe
         public DateTime? LastRunUtc { get; private set; }
         /// <summary>Monitor'e ulaşılamıyorsa son hata.</summary>
         public string? LastError { get; private set; }
-        /// <summary>Monitor'deki uygulama adı (ilk başarılı bildirimden sonra).</summary>
-        public string? AppName { get; private set; }
+        /// <summary>Monitor'deki uygulama kimliği (ilk başarılı bildirimden sonra).</summary>
+        public string? AppId { get; private set; }
 
         /// <summary>
-        /// Strict mod agent'ını başlatır. <paramref name="options"/> verilmezse ayarlar ortam değişkenlerinden (ve .NET
-        /// Framework'te appSettings'ten) okunur. MonitorUrl veya AppKey yoksa hiçbir şey yapmadan null döner. Süreç başına tek
-        /// agent çalışır; ikinci çağrı mevcut agent'ı döner.
+        /// ConnectivityProbe'u başlatır. Uygulama açılırken bir kez çağrılır:
+        /// ASP.NET Core / Worker / konsol uygulamalarında Program.cs'te, IIS / klasik ASP.NET'te Global.asax Application_Start'ta.
         /// </summary>
-        public static ConnectivityProbeAgent? Start(ConnectivityProbeOptions? options = null)
+        /// <param name="monitorUrl">Monitor'ün adresi (ör. https://monitor.example.com). Zorunlu.</param>
+        /// <param name="appKey">Uygulama anahtarı (ör. "orders-api"): uygulamanın Monitor'deki kimliği. Zorunlu.</param>
+        /// <param name="appName">Monitor'de görünecek ad; verilmezse bu metodu çağıran projenin assembly adı.</param>
+        /// <param name="configure">İsteğe bağlı ince ayarlar (test aralığı, bildirim sıklığı...).</param>
+        /// <returns>Çalışan agent; zorunlu değerler eksik veya geçersizse null (uygulama etkilenmez, konsola mesaj yazılır).</returns>
+        [MethodImpl(MethodImplOptions.NoInlining)] // Assembly.GetCallingAssembly'nin doğru projeyi bulması için
+        public static ConnectivityProbeAgent? Start(string monitorUrl, string appKey, string? appName = null, Action<ConnectivityProbeOptions>? configure = null)
         {
-            options ??= ConnectivityProbeOptions.FromEnvironment();
-            if (!options.StrictEnabled) return null;
+            // Sürüm bilgisi Start'ı çağıran projeden okunur (IIS'te GetEntryAssembly null döner, çağıran proje doğru sonucu verir).
+            var app = Assembly.GetCallingAssembly();
+            if (app == typeof(ConnectivityProbeAgent).Assembly) app = Assembly.GetEntryAssembly();
+
+            try
+            {
+                var options = new ConnectivityProbeOptions { MonitorUrl = monitorUrl?.Trim() ?? "", AppKey = appKey?.Trim() ?? "", AppName = appName };
+                configure?.Invoke(options);
+                return Start(options, app);
+            }
+            catch (Exception ex)
+            {
+                // ConnectivityProbe hiçbir koşulda uygulamanın açılmasını engellememeli.
+                Say("Could not start: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static ConnectivityProbeAgent? Start(ConnectivityProbeOptions options, Assembly? app)
+        {
+            if (string.IsNullOrEmpty(options.MonitorUrl) || string.IsNullOrEmpty(options.AppKey))
+            {
+                Say("MonitorUrl and AppKey are required. Connectivity probe is disabled.");
+                return null;
+            }
+            if (!Uri.TryCreate(options.MonitorUrl, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
+            {
+                Say("Invalid MonitorUrl '" + options.MonitorUrl + "' (expected http:// or https://). Connectivity probe is disabled.");
+                return null;
+            }
+            options.MonitorUrl = options.MonitorUrl.TrimEnd('/');
+
+#if NETFRAMEWORK
+            // .NET Framework 4.6.2 - 4.7'de TLS 1.2 varsayılan olarak kapalı olabilir; HTTPS Monitor'e bağlanabilmek için ekliyoruz
+            // (mevcut protokoller kaldırılmaz).
+            System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+#endif
+
             lock (StartLock)
             {
-                return _current ??= new ConnectivityProbeAgent(options);
+                // Süreç başına tek agent; ikinci çağrı mevcut olanı döner.
+                return _current ??= new ConnectivityProbeAgent(options, app);
             }
         }
 
         /// <summary>
         /// Agent'ı durdurur ve Monitor'e "kapanıyorum" bildirir (en fazla <paramref name="timeout"/>, varsayılan 5 sn).
-        /// Uygulama kapanırken çağrılmalıdır; ASP.NET Core ve IIS'te kendiliğinden çağrılır.
+        /// Süreç kapanırken kendiliğinden çağrılır; elle çağırmak gerekmez.
         /// </summary>
         public void Stop(TimeSpan? timeout = null)
         {
             if (Interlocked.Exchange(ref _stopped, 1) == 1) return;
             var wait = timeout ?? TimeSpan.FromSeconds(5);
+            AppDomain.CurrentDomain.ProcessExit -= OnShutdown;
+            AppDomain.CurrentDomain.DomainUnload -= OnShutdown;
+
             _stop.Cancel();
             try { _loop.Wait(wait); } catch (AggregateException) { /* döngü iptalle bitti */ }
 
-            // Senkron bağlamlarda (IIS, ApplicationStopping) kilitlenmemek için iş parçacığı havuzunda bekliyoruz.
-            try { Task.Run(SendGoodbyeAsync).Wait(wait); }
-            catch (AggregateException ex) { Log(ProbeLogLevel.Warning, "ConnectivityProbe strict mode: goodbye failed: " + ex.InnerException?.Message); }
+            // Monitor'e hiç ulaşılamadıysa veda göndermeye çalışıp kapanışı geciktirmiyoruz.
+            if (LastContactUtc != null)
+            {
+                // Senkron bağlamlarda (IIS, kapanış olayları) kilitlenmemek için iş parçacığı havuzunda bekliyoruz.
+                try { Task.Run(SendGoodbyeAsync).Wait(wait); }
+                catch (AggregateException) { /* Monitor'e ulaşılamadı; pod birkaç tur sonra "eksik" görünür */ }
+            }
 
             _http.Dispose();
             lock (StartLock)
             {
                 if (ReferenceEquals(_current, this)) _current = null;
             }
-            Log(ProbeLogLevel.Information, "ConnectivityProbe strict mode stopped");
         }
 
         public void Dispose() => Stop();
+
+        private void OnShutdown(object? sender, EventArgs e) => Stop(TimeSpan.FromSeconds(3));
 
         // ------------------------------------------------------------------ döngü
 
         private async Task LoopAsync(CancellationToken ct)
         {
-            var poll = TimeSpan.FromSeconds(Math.Max(1, _options.StrictPollSeconds));
+            var poll = TimeSpan.FromSeconds(Math.Max(1, _options.PollSeconds));
             AgentRun? pending = null;       // gönderilmeyi bekleyen test sonuçları
             DateTime? lastRunStarted = null;
             string? lastRunRequestId = null;
             int failures = 0;
+            bool everConnected = false;
 
             while (!ct.IsCancellationRequested)
             {
-                // step 1: Bildirim gönderiyoruz (varsa son test sonuçlarıyla); yanıtta güncel tanımlar ve test aralığı gelir.
+                // step 1: Bildirim (ilkinde kayıt) gönderiyoruz; varsa son test sonuçları da gider. Yanıtta tanımlar ve test aralığı gelir.
                 Assignment? assignment = null;
                 try
                 {
                     assignment = await ReportAsync(pending, ct).ConfigureAwait(false);
                     pending = null;
-                    if (failures > 0) Log(ProbeLogLevel.Information, "ConnectivityProbe strict mode: Monitor reachable again");
-                    failures = 0;
                     LastContactUtc = DateTime.UtcNow;
                     LastError = null;
-                    AppName = assignment.AppName;
+                    AppId = assignment.AppId;
+
+                    if (!everConnected)
+                        Say("Registered to monitor " + _options.MonitorUrl + " as \"" + _options.AppKey + "\" ("
+                            + assignment.Connections.Count + " connection" + (assignment.Connections.Count == 1 ? "" : "s") + ").");
+                    else if (failures > 0)
+                        Say("Reconnected to monitor " + _options.MonitorUrl + ".");
+                    everConnected = true;
+                    failures = 0;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -160,19 +223,19 @@ namespace ConnectivityProbe
                 }
                 catch (Exception ex)
                 {
-                    // Monitor'e ulaşılamıyor / anahtar yanlış: logu boğmamak için ilk hatayı ve sonra yaklaşık 5 dakikada bir yazıyoruz.
+                    // Uygulama etkilenmez. Konsolu boğmamak için ilk hatayı ve sonra yaklaşık 5 dakikada bir yazıyoruz.
                     failures++;
-                    LastError = ex.InnerException?.Message ?? ex.Message;
+                    LastError = Describe(ex);
                     if (failures == 1 || failures % Math.Max(1, 300 / (int)poll.TotalSeconds) == 0)
-                        Log(ProbeLogLevel.Warning, "ConnectivityProbe strict mode: cannot report to " + _options.MonitorUrl + ": " + LastError);
+                        Say("Could not connect to monitor " + _options.MonitorUrl + ": " + LastError);
                 }
 
-                // step 2: Test zamanı geldiyse (ilk tur, aralık doldu veya Monitor'de "Şimdi test et") testleri yapıp sonucu hemen gönderiyoruz.
+                // step 2: Test zamanı geldiyse (ilk tur, aralık doldu veya "Şimdi test et") testleri yapıp sonucu hemen gönderiyoruz.
                 if (assignment != null)
                 {
                     bool runRequested = lastRunRequestId != null && assignment.RunRequestId != lastRunRequestId;
                     lastRunRequestId = assignment.RunRequestId;
-                    var interval = TimeSpan.FromSeconds(Math.Max(5, _options.StrictIntervalSeconds > 0 ? _options.StrictIntervalSeconds : assignment.IntervalSeconds));
+                    var interval = TimeSpan.FromSeconds(Math.Max(5, _options.IntervalSeconds > 0 ? _options.IntervalSeconds : assignment.IntervalSeconds));
 
                     if (lastRunStarted == null || DateTime.UtcNow - lastRunStarted.Value >= interval || runRequested)
                     {
@@ -201,7 +264,7 @@ namespace ConnectivityProbe
             var started = DateTime.UtcNow;
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var results = new AgentResult[assignment.Connections.Count];
-            using (var gate = new SemaphoreSlim(MaxParallelTests))
+            using (var gate = new SemaphoreSlim(Math.Max(1, _options.MaxParallelTests)))
             {
                 await Task.WhenAll(assignment.Connections.Select(async (connection, i) =>
                 {
@@ -210,8 +273,6 @@ namespace ConnectivityProbe
                     finally { gate.Release(); }
                 })).ConfigureAwait(false);
             }
-
-            Log(ProbeLogLevel.Debug, "ConnectivityProbe strict mode: tested " + results.Length + " connection(s) in " + clock.ElapsedMilliseconds + " ms");
             return new AgentRun { StartedAtUtc = started, DurationMs = clock.ElapsedMilliseconds, Results = results.ToList() };
         }
 
@@ -219,7 +280,7 @@ namespace ConnectivityProbe
         {
             var result = new AgentResult { ConnectionId = connection.Id };
             if (!ProbeTarget.TryParse(connection.Host, connection.Port?.ToString(CultureInfo.InvariantCulture),
-                    out var host, out var port, out var urlScheme, out var error))
+                    out var host, out var port, out _, out var error))
             {
                 result.Error = "Invalid target: " + error;
                 return result;
@@ -227,10 +288,10 @@ namespace ConnectivityProbe
 
             try
             {
-                var timeout = TimeSpan.FromMilliseconds(Math.Min(Math.Max(500, assignment.TimeoutMs), _options.MaxTimeout.TotalMilliseconds));
-                var attempts = Math.Min(Math.Max(1, assignment.Attempts), _options.MaxAttempts);
-                result.Report = await DiscoverRunner.RunAsync(_options, host, port, urlScheme ?? "http", connection.UsesConnectivityProbe,
-                    timeout, attempts, assignment.Confidence, _options.AccessKey, ct).ConfigureAwait(false);
+                // Telnet: isim çözülür; dönen her IP ve ismin kendisi aynı anda denenir (nedeni: timeout, reddedildi, DNS...).
+                var timeout = TimeSpan.FromMilliseconds(Math.Max(500, _options.TimeoutMs > 0 ? _options.TimeoutMs : assignment.TimeoutMs));
+                result.Tcp = await TcpProbe.ProbeAllAsync(host, port, 1, timeout, TimeSpan.Zero, Math.Max(1, _options.MaxAddresses),
+                    TimeSpan.FromTicks(timeout.Ticks * 3), ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -247,10 +308,12 @@ namespace ConnectivityProbe
 
         private async Task<Assignment> ReportAsync(AgentRun? run, CancellationToken ct)
         {
+            var identity = PodIdentityBuilder.Build(_app, _options.AppName);
             var report = new AgentReport
             {
-                Identity = InstanceIdentityBuilder.Build(new ProbeRequest(), _options),
-                PollSeconds = Math.Max(1, _options.StrictPollSeconds),
+                AppName = identity.AppName,
+                Pod = identity,
+                PollSeconds = Math.Max(1, _options.PollSeconds),
                 Run = run
             };
 
@@ -266,7 +329,11 @@ namespace ConnectivityProbe
 
         private async Task SendGoodbyeAsync()
         {
-            var body = Json.Serialize(new Dictionary<string, object?> { ["instanceId"] = InstanceIdentityBuilder.GetInstanceId(_options) });
+            var body = Json.Serialize(new Dictionary<string, object?>
+            {
+                ["instanceId"] = PodIdentityBuilder.ComputeId(PodIdentityBuilder.IdSeed(
+                    System.Environment.MachineName, System.Environment.GetEnvironmentVariable("POD_NAME")))
+            });
             using (var request = NewRequest(GoodbyePath, body))
             using (var response = await _http.SendAsync(request).ConfigureAwait(false))
             {
@@ -276,7 +343,7 @@ namespace ConnectivityProbe
 
         private HttpRequestMessage NewRequest(string path, string json)
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, _options.MonitorUrl!.TrimEnd('/') + path)
+            var request = new HttpRequestMessage(HttpMethod.Post, _options.MonitorUrl + path)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
@@ -289,7 +356,7 @@ namespace ConnectivityProbe
             try
             {
                 var error = Json.GetString(Json.Parse(body) as IDictionary<string, object?>, "error");
-                return string.IsNullOrEmpty(error) ? "" : ": " + error;
+                return string.IsNullOrEmpty(error) ? "" : " " + error;
             }
             catch (FormatException)
             {
@@ -297,24 +364,32 @@ namespace ConnectivityProbe
             }
         }
 
-        private void Log(ProbeLogLevel level, string message)
+        // İç içe istisnalardan en anlamlı mesajı alır (ör. "No such host is known").
+        private static string Describe(Exception ex)
         {
-            try { _options.Log?.Invoke(level, message); }
-            catch (Exception) { /* log hatası agent'ı durdurmasın */ }
+            if (ex is TaskCanceledException) return "timeout";
+            while (ex.InnerException != null) ex = ex.InnerException;
+            return ex.Message;
+        }
+
+        // Konsola (ve IIS gibi konsolu olmayan ortamlar için Trace'e) tek satırlık İngilizce mesaj.
+        internal static void Say(string message)
+        {
+            var line = "[ConnectivityProbe] " + message;
+            try { Console.WriteLine(line); } catch (Exception) { /* konsol yoksa */ }
+            try { System.Diagnostics.Trace.WriteLine(line); } catch (Exception) { /* yok sayılır */ }
         }
 
         // ------------------------------------------------------------------ Monitor yanıtı
 
-        /// <summary>Monitor'ün bildirim yanıtı: bu uygulamaya ait tanımlar ve test ayarları.</summary>
+        /// <summary>Monitor'ün bildirim yanıtı: bu uygulamaya ait bağlantılar ve test ayarları.</summary>
         internal sealed class Assignment
         {
-            public string? AppName { get; set; }
+            public string? AppId { get; set; }
             public int IntervalSeconds { get; set; } = 30;
             /// <summary>Monitor'de "Şimdi test et"e her basıldığında değişir; değiştiyse pod beklemeden test eder.</summary>
             public string RunRequestId { get; set; } = "";
             public int TimeoutMs { get; set; } = 5000;
-            public int Attempts { get; set; } = 60;
-            public double Confidence { get; set; } = 0.95;
             public List<AssignedConnection> Connections { get; set; } = new List<AssignedConnection>();
 
             public static Assignment Parse(string json)
@@ -322,20 +397,17 @@ namespace ConnectivityProbe
                 var o = Json.Parse(json) as IDictionary<string, object?> ?? throw new FormatException("Monitor response is not a JSON object");
                 var a = new Assignment
                 {
-                    AppName = Json.GetString(o, "appName"),
+                    AppId = Json.GetString(o, "appId"),
                     RunRequestId = Json.GetString(o, "runRequestId") ?? "",
                     Connections = Json.GetObjectList(o, "connections").Select(c => new AssignedConnection
                     {
                         Id = Json.GetString(c, "id") ?? "",
                         Host = Json.GetString(c, "host") ?? "",
-                        Port = Json.GetDouble(c, "port") is double p ? (int)p : (int?)null,
-                        UsesConnectivityProbe = Json.GetBool(c, "usesConnectivityProbe")
+                        Port = Json.GetDouble(c, "port") is double p ? (int)p : (int?)null
                     }).Where(c => c.Id.Length > 0).ToList()
                 };
                 if (Json.GetLong(o, "intervalSeconds") is long interval && interval > 0) a.IntervalSeconds = (int)interval;
                 if (Json.GetLong(o, "timeoutMs") is long timeout && timeout > 0) a.TimeoutMs = (int)timeout;
-                if (Json.GetLong(o, "attempts") is long attempts && attempts > 0) a.Attempts = (int)attempts;
-                if (Json.GetDouble(o, "confidence") is double confidence && confidence >= 0.5 && confidence <= 0.999) a.Confidence = confidence;
                 return a;
             }
         }
@@ -345,7 +417,6 @@ namespace ConnectivityProbe
             public string Id { get; set; } = "";
             public string Host { get; set; } = "";
             public int? Port { get; set; }
-            public bool UsesConnectivityProbe { get; set; }
         }
     }
 }

@@ -20,8 +20,9 @@ public sealed class TeamDefinition
 }
 
 /// <summary>
-/// Havuzdaki bir hedef (ör. veritabanı sunucusu, harici API). Uygulamalara sürükle-bırak ile bağlanır.
-/// TeamId doluysa o ekibin havuzundadır ve yalnızca o ekibin uygulamalarına atanabilir; boşsa ortak havuzdadır, herkes kullanır.
+/// Havuzdaki bir hedef (ör. veritabanı sunucusu, harici API). Uygulamalara sürükle-bırak ile atanır; uygulamanın her pod'u
+/// bu hedefe kendi içinden TCP bağlantısı açarak test eder.
+/// TeamId doluysa o ekibin havuzundadır ve yalnızca o ekibin uygulamalarına atanabilir; boşsa ortak havuzdadır.
 /// </summary>
 public sealed class ConnectionDefinition
 {
@@ -33,47 +34,38 @@ public sealed class ConnectionDefinition
     public string Host { get; set; } = "";
     public int? Port { get; set; }
     /// <summary>
-    /// Checkpoint: hedef de ConnectivityProbe kullanıyor mu? false (DB, Redis, dış API...): yalnızca telnet (TCP) testi.
-    /// true: önce telnet, açıksa hedefin identity ucuyla pod'ları keşfedilir ("hedefin 10 pod'unu buldum").
+    /// Hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği. Bağlantı satırında hedef uygulamanın pod sayısı ve durumu da
+    /// gösterilir (ör. "hedef: Orders API · 3 pod · Sağlıklı").
     /// </summary>
-    public bool UsesConnectivityProbe { get; set; }
+    public string? TargetAppId { get; set; }
 }
 
-/// <summary>Uygulamanın izlenme yöntemi.</summary>
-public static class AppModes
-{
-    /// <summary>Monitor uygulamanın adresine gider; istekler load balancer üzerinden pod'lara düşer (pod sayısı olasılıksal).</summary>
-    public const string Discover = "discover";
-    /// <summary>Her pod uygulama anahtarıyla Monitor'den kendi tanımlarını çeker, kendi içinde test edip sonucu gönderir (kesin).</summary>
-    public const string Strict = "strict";
-
-    public static string Normalize(string? mode) =>
-        string.Equals(mode?.Trim(), Strict, StringComparison.OrdinalIgnoreCase) ? Strict : Discover;
-}
-
-/// <summary>ConnectivityProbe'u yüklemiş, izlenecek bir uygulama.</summary>
+/// <summary>
+/// ConnectivityProbe'u kullanan ve Monitor'e anahtarıyla kendini kaydetmiş uygulama. Monitor'de elle eklenmez: bilinmeyen bir
+/// anahtarla ilk bildirim geldiğinde kendiliğinden oluşur ("Atanmamış" altında).
+/// </summary>
 public sealed class AppDefinition
 {
     public string Id { get; set; } = "";
-    /// <summary>Uygulamanın ekibi; null = atanmamış (eski kayıtlar).</summary>
+    /// <summary>Uygulamanın ekibi; null = atanmamış (yeni kaydolan uygulamalar).</summary>
     public string? TeamId { get; set; }
+    /// <summary>İlk kayıtta uygulamanın bildirdiği ad; sonradan Monitor'de değiştirilebilir.</summary>
     public string Name { get; set; } = "";
-    /// <summary>discover | strict (bkz. <see cref="AppModes"/>). Eski kayıtlarda discover.</summary>
-    public string Mode { get; set; } = AppModes.Discover;
-    /// <summary>
-    /// Strict mod: uygulamanın pod'larının Monitor'den kendi tanımlarını çekmek ve sonuç göndermek için kullandığı anahtar
-    /// (ConnectivityProbe:AppKey). Discover modda null.
-    /// </summary>
-    public string? AppKey { get; set; }
-    /// <summary>
-    /// Uygulamanın adresi (ör. https://orders.example.com). Discover modda zorunlu: pod'lara dağıtım yapan adres olmalı.
-    /// Strict modda isteğe bağlı: verilirse Monitor ayrıca dışarıdan erişimi kontrol eder.
-    /// </summary>
-    public string BaseUrl { get; set; } = "";
-    /// <summary>Uygulamada UseConnectivityProbe'un kullandığı yol. Varsayılan: /connectivity-probe</summary>
-    public string ProbePath { get; set; } = "/connectivity-probe";
-    /// <summary>Bu uygulamayla ilişkilendirilmiş (sürükle-bırakla eklenmiş) bağlantıların kimlikleri.</summary>
+    /// <summary>Uygulama anahtarı: geliştiricinin ConnectivityProbeAgent.Start'a verdiği değer. Uygulamanın kimliğidir, değişmez.</summary>
+    public string AppKey { get; set; } = "";
+    public DateTime RegisteredAtUtc { get; set; }
+    /// <summary>Bu uygulamaya atanmış bağlantıların kimlikleri.</summary>
     public List<string> ConnectionIds { get; set; } = new();
+}
+
+/// <summary>
+/// Pod'ların otomatik tespit edilen cluster'ı. Anahtar: Kubernetes cluster sertifikasının parmak izi ("k8s:...") ya da
+/// Kubernetes dışında bildirimin geldiği ağ adresi ("net:..."). Ad ilk görüldüğünde "Cluster N" olur, Monitor'de değiştirilebilir.
+/// </summary>
+public sealed class ClusterDefinition
+{
+    public string Key { get; set; } = "";
+    public string Name { get; set; } = "";
 }
 
 public sealed class DefinitionData
@@ -82,93 +74,85 @@ public sealed class DefinitionData
     public List<TeamDefinition> Teams { get; set; } = new();
     public List<AppDefinition> Apps { get; set; } = new();
     public List<ConnectionDefinition> Connections { get; set; } = new();
+    public List<ClusterDefinition> Clusters { get; set; } = new();
 }
 
 // ---------------------------------------------------------------------------------------------
-// API çıktıları (gizli bilgiler olmadan)
+// API çıktıları ve girdileri
 // ---------------------------------------------------------------------------------------------
 
-/// <summary>Uygulama tanımının arayüze giden hali.</summary>
-/// <remarks>Strict anahtarı her zaman görüntülenebilir (yalnızca giriş yapmış yöneticiler görür).</remarks>
-public sealed record AppView(string Id, string? TeamId, string Name, string Mode, string? AppKey, string BaseUrl, string ProbePath, List<string> ConnectionIds)
+public sealed record AppView(string Id, string? TeamId, string Name, string AppKey, DateTime RegisteredAtUtc, List<string> ConnectionIds)
 {
-    public static AppView From(AppDefinition a) =>
-        new(a.Id, a.TeamId, a.Name, a.Mode, a.AppKey, a.BaseUrl, a.ProbePath, a.ConnectionIds.ToList());
+    public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.AppKey, a.RegisteredAtUtc, a.ConnectionIds.ToList());
 }
 
 /// <summary>Bağlantı tanımının arayüze giden hali. TeamId null = ortak havuz.</summary>
-public sealed record ConnectionView(string Id, string? TeamId, string Name, string Host, int? Port, bool UsesConnectivityProbe)
+public sealed record ConnectionView(string Id, string? TeamId, string Name, string Host, int? Port, string? TargetAppId)
 {
-    public static ConnectionView From(ConnectionDefinition c) => new(c.Id, c.TeamId, c.Name, c.Host, c.Port, c.UsesConnectivityProbe);
+    public static ConnectionView From(ConnectionDefinition c) => new(c.Id, c.TeamId, c.Name, c.Host, c.Port, c.TargetAppId);
 }
 
 public sealed record DefinitionsView(
-    List<UnitDefinition> Units, List<TeamDefinition> Teams, List<AppView> Apps, List<ConnectionView> Connections);
-
-// ---------------------------------------------------------------------------------------------
-// API girdileri
-// ---------------------------------------------------------------------------------------------
+    List<UnitDefinition> Units, List<TeamDefinition> Teams, List<AppView> Apps, List<ConnectionView> Connections, List<ClusterDefinition> Clusters);
 
 public sealed record UnitInput(string? Name);
 
 public sealed record TeamInput(string? Name, string? UnitId);
 
-/// <param name="TeamId">Uygulamanın ekibi (null = atanmamış).</param>
-/// <param name="Mode">discover | strict (boş = discover).</param>
-public sealed record AppInput(string? Name, string? BaseUrl, string? TeamId = null, string? ProbePath = null, string? Mode = null);
+/// <summary>Uygulamada değiştirilebilenler: ad ve ekip (anahtar uygulamanın kimliğidir, değişmez).</summary>
+public sealed record AppInput(string? Name, string? TeamId = null);
+
+/// <param name="TeamId">Sahip ekip; null = ortak havuz.</param>
+/// <param name="TargetAppId">Hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği (isteğe bağlı).</param>
+public sealed record ConnectionInput(string? Name, string? Host, int? Port, string? TeamId = null, string? TargetAppId = null);
+
+public sealed record ClusterInput(string? Name);
 
 /// <summary>Monitor arayüzü girişi.</summary>
 public sealed record LoginInput(string? Username, string? Password);
 
 // ---------------------------------------------------------------------------------------------
-// Strict mod: pod'lara (ConnectivityProbeAgent) dönen yanıt
+// Pod'lara (ConnectivityProbeAgent) dönen yanıt
 // ---------------------------------------------------------------------------------------------
 
-/// <summary>Pod'un bildirimine yanıt: bu uygulamaya ait bağlantı tanımları ve test ayarları.</summary>
+/// <summary>Pod'un bildirimine yanıt: bu uygulamaya ait bağlantılar ve test ayarları.</summary>
 /// <param name="RunRequestId">"Şimdi test et"e her basıldığında değişir; pod değiştiğini görünce beklemeden test eder.</param>
 public sealed record AgentAssignment(
-    string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, int Attempts, double Confidence,
-    List<AgentConnection> Connections);
+    string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, List<AgentConnection> Connections);
 
-public sealed record AgentConnection(string Id, string Name, string Host, int? Port, bool UsesConnectivityProbe);
+public sealed record AgentConnection(string Id, string Name, string Host, int? Port);
 
 public sealed record AgentGoodbye(string? InstanceId);
 
-/// <param name="TeamId">Sahip ekip; null = ortak havuz.</param>
-/// <param name="UsesConnectivityProbe">Hedef de ConnectivityProbe kullanıyor mu (pod keşfi yapılsın mı).</param>
-public sealed record ConnectionInput(string? Name, string? Host, int? Port, bool? UsesConnectivityProbe = null, string? TeamId = null);
-
 // ---------------------------------------------------------------------------------------------
-// Monitör sonuçları (bellekte tutulur, her döngüde yenilenir)
+// Monitör sonuçları (bellekte tutulur)
 // ---------------------------------------------------------------------------------------------
 
 public sealed class MonitorSnapshot
 {
+    /// <summary>Pod'ların test aralığı (sn).</summary>
     public int IntervalSeconds { get; set; }
-    /// <summary>Bir pod'un (veya hedef pod'unun) alarm sayılması için üst üste kaç tur görünmemesi gerektiği.</summary>
+    /// <summary>Bir pod'un "eksik" sayılması için bildirim göndermeden geçmesi gereken test aralığı sayısı.</summary>
     public int MissingAfterCycles { get; set; }
     public DateTime? LastRunUtc { get; set; }
-    public DateTime? NextRunUtc { get; set; }
-    public bool Running { get; set; }
     public List<AppStatus> Apps { get; set; } = new();
+    /// <summary>Görülen cluster'lar (ad ve pod sayısıyla).</summary>
+    public List<ClusterView> Clusters { get; set; } = new();
 }
+
+public sealed record ClusterView(string Key, string Name, int Pods, int Apps);
 
 public sealed class AppStatus
 {
     public string AppId { get; set; } = "";
     public string Name { get; set; } = "";
-    public string BaseUrl { get; set; } = "";
-    /// <summary>discover | strict</summary>
-    public string Mode { get; set; } = AppModes.Discover;
+    public string AppKey { get; set; } = "";
     /// <summary>healthy | degraded | down | unknown</summary>
     public string State { get; set; } = "unknown";
     public string? Message { get; set; }
     public DateTime? CheckedAtUtc { get; set; }
-    /// <summary>Bu döngüde cevap veren farklı pod sayısı.</summary>
+    /// <summary>Şu an bildirim gönderen (canlı) pod sayısı. Pod'lar kendini bildirdiği için kesindir.</summary>
     public int PodCount { get; set; }
-    /// <summary>Pod sayımı için istenen güvene ulaşıldı mı (false ise sayı "en az" anlamındadır).</summary>
-    public bool? Converged { get; set; }
-    public double? Confidence { get; set; }
     public List<PodStatus> Pods { get; set; } = new();
     public List<ConnectionStatus> Connections { get; set; } = new();
     public List<HistoryPoint> History { get; set; } = new();
@@ -180,20 +164,29 @@ public sealed class PodStatus
     public string MachineName { get; set; } = "";
     public List<string> Addresses { get; set; } = new();
     public DateTime? StartedAtUtc { get; set; }
-    /// <summary>Pod adı, namespace, node gibi ek bilgiler (identity yanıtındaki environment + info).</summary>
+    /// <summary>Pod adı, node, ortam gibi ek bilgiler (pod'un bildirdiği seçili ortam değişkenleri).</summary>
     public Dictionary<string, string> Details { get; set; } = new();
-    /// <summary>Bu döngüde cevap verdi mi.</summary>
+    /// <summary>Şu an bildirim gönderiyor mu.</summary>
     public bool Seen { get; set; }
-    /// <summary>
-    /// up: bu turda cevap verdi. unconfirmed: bu turda denk gelinmedi (rastgele dağıtım yüzünden olabilir, alarm değil).
-    /// missing: üst üste MissingAfterCycles tur görünmedi ve yerine yeni pod gelmedi (alarm).
-    /// </summary>
+    /// <summary>up: canlı. unconfirmed: bildirim gecikti (alarm değil). missing: üst üste MissingAfterCycles aralık bildirim yok (alarm).</summary>
     public string State { get; set; } = "up";
-    /// <summary>Üst üste kaç turdur görünmüyor.</summary>
+    /// <summary>Kaç test aralığıdır bildirim göndermiyor.</summary>
     public int MissedCycles { get; set; }
     public DateTime LastSeenUtc { get; set; }
-    /// <summary>Pod'daki ConnectivityProbe sürümü (biliniyorsa).</summary>
+
+    /// <summary>Pod'daki ConnectivityProbe kütüphanesinin sürümü.</summary>
     public string? ProbeVersion { get; set; }
+    /// <summary>Uygulamanın sürümü (AssemblyInformationalVersion / AssemblyVersion'dan büyük olanı).</summary>
+    public string? AppVersion { get; set; }
+    /// <summary>Uygulamanın build kimliği (MVID'nin kısa hali): aynı sürüm numarasındaki farklı build'leri ayırt eder.</summary>
+    public string? BuildId { get; set; }
+    public DateTime? BuildDateUtc { get; set; }
+    /// <summary>Cluster anahtarı (bkz. ClusterDefinition) ve adı.</summary>
+    public string? ClusterKey { get; set; }
+    public string? ClusterName { get; set; }
+    public string? Namespace { get; set; }
+    /// <summary>Bildirimin geldiği ağ adresi.</summary>
+    public string? SourceIp { get; set; }
 }
 
 public sealed class ConnectionStatus
@@ -201,8 +194,8 @@ public sealed class ConnectionStatus
     public string ConnectionId { get; set; } = "";
     public string Name { get; set; } = "";
     public string Target { get; set; } = "";
-    /// <summary>Probe çağrısının kendisi başarısız olduysa nedeni (ör. HTTP 403 = hedef izin listesinde değil).</summary>
-    public string? CallError { get; set; }
+    /// <summary>Hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği.</summary>
+    public string? TargetAppId { get; set; }
     public List<PodConnectionCell> Cells { get; set; } = new();
 }
 
@@ -212,7 +205,7 @@ public sealed record IpResult(string Address, bool Success, long ElapsedMs, stri
 public sealed record PodConnectionCell
 {
     public string InstanceId { get; init; } = "";
-    /// <summary>true: bu döngüde test edildi. false: bu döngüde bu pod'a denk gelinmedi, son bilinen sonuç gösteriliyor.</summary>
+    /// <summary>true: pod canlı ve sonuç son test turlarından. false: son bilinen sonuç (soluk gösterilir).</summary>
     public bool Fresh { get; init; }
     public bool Success { get; init; }
     public long ElapsedMs { get; init; }
@@ -222,70 +215,10 @@ public sealed record PodConnectionCell
     public List<IpResult> IpResults { get; init; } = new();
     public string? Error { get; init; }
     public DateTime CheckedAtUtc { get; init; }
-
-    // ---- Yalnızca ConnectivityProbe kullanan hedefler (UsesConnectivityProbe) için ----
-
-    /// <summary>unreachable | connectivityProbe | connectivityProbeError | other (bkz. ConnectivityProbe.ProbeTargetKind).</summary>
-    public string? TargetKind { get; init; }
-    /// <summary>Bu pod'un kendi içinden keşfettiği hedef pod'lar.</summary>
-    public List<TargetPod>? TargetPods { get; init; }
-    /// <summary>Hedef pod sayımı istenen güvene ulaştı mı (false: "en az" bu kadar).</summary>
-    public bool? TargetCountConverged { get; init; }
-    /// <summary>Load balancer üzerinden atılıp cevapsız kalan (hangi pod'a gittiği bilinmeyen) istek sayısı.</summary>
-    public int TargetFailedRequests { get; init; }
-    /// <summary>
-    /// Hedefin daha önce görülmüş ama bu pod'un son turlarda erişemediği pod'ları (ne zamandan beri erişilemediğiyle).
-    /// Hedef Monitor'de ayrıca kayıtlı olmasa bile bilinir: Monitor her bağlantının hedef pod'larını kendisi hatırlar.
-    /// </summary>
-    public List<UnreachedTarget>? UnreachedTargets { get; init; }
-
-    // ---- Tüm bağlantılar için ----
-
     /// <summary>Bu pod'un bu bağlantıdaki son başarılı testi.</summary>
     public DateTime? LastSuccessUtc { get; init; }
     /// <summary>Başarısızsa: kesintisiz olarak ne zamandan beri başarısız.</summary>
     public DateTime? FailingSinceUtc { get; init; }
-}
-
-/// <summary>Hedef uygulamanın bir pod'u: test eden pod onu kendi içinden gördü.</summary>
-public sealed record TargetPod(string InstanceId, string MachineName, List<string> Addresses, int Hits, string? PodName = null);
-
-/// <summary>
-/// Test eden pod'un erişemediği hedef pod'u.
-/// Confirmed=false: yalnızca birkaç turdur görülmedi (rastgele dağıtım olabilir, alarm değil).
-/// Confirmed=true: üst üste MissingAfterCycles tur erişilemedi (alarm).
-/// </summary>
-public sealed record UnreachedTarget(
-    string InstanceId, string MachineName, string? PodName, int MissedCycles, DateTime SinceUtc, DateTime? LastReachedUtc, bool Confirmed);
-
-/// <summary>Bir bağlantının hedefinde görülen pod'ların hafızası (kalıcı olarak saklanır).</summary>
-public sealed class TargetMemory
-{
-    public Dictionary<string, KnownTargetPod> Pods { get; set; } = new();
-    /// <summary>Bilinen hedef pod'ların hepsine erişilen son turdaki hedef pod sayısı (deploy ile "pod çöktü"yü ayırmak için).</summary>
-    public int ExpectedTargets { get; set; }
-}
-
-public sealed class KnownTargetPod
-{
-    public string InstanceId { get; set; } = "";
-    public string MachineName { get; set; } = "";
-    public string? PodName { get; set; }
-    public DateTime FirstSeenUtc { get; set; }
-    /// <summary>Herhangi bir pod'un bu hedef pod'a en son eriştiği an.</summary>
-    public DateTime? LastReachedUtc { get; set; }
-    /// <summary>Hiçbir pod'un erişemediği ardışık tur sayısı.</summary>
-    public int Missed { get; set; }
-    /// <summary>Test eden pod -> bu hedef pod'a erişim durumu.</summary>
-    public Dictionary<string, TargetReach> By { get; set; } = new();
-}
-
-public sealed class TargetReach
-{
-    public DateTime? LastReachedUtc { get; set; }
-    /// <summary>Erişilemiyorsa: ilk erişilemeyen tur.</summary>
-    public DateTime? MissingSinceUtc { get; set; }
-    public int Missed { get; set; }
 }
 
 public sealed record HistoryPoint(DateTime AtUtc, string State, int PodCount);

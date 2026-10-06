@@ -1,21 +1,23 @@
-// Bu örnek uygulamada ConnectivityProbe'a dair TEK SATIR KOD YOKTUR.
+// ConnectivityProbe örneği: uygulama başlarken tek satır.
 //
-// Uçlar (/connectivity-probe/discover, /connectivity-probe/identity) şu iki şeyle devreye girer:
-//   1) Proje ConnectivityProbe'u referans alır (gerçek uygulamalarda NuGet paketi).
-//   2) Ortam değişkeni: ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe   (bkz. Properties/launchSettings.json)
-// Ayarlar appsettings.json içindeki "ConnectivityProbe" bölümünden okunur.
+// Uygulama ilk açılışta Monitor'e anahtarıyla kendini kaydeder; her pod bağlantılarını Monitor'den alır, kendi içinden test eder ve
+// sonuçları, uygulama sürümü ve cluster bilgisiyle birlikte gönderir. Monitor'e ulaşılamazsa uygulama etkilenmez; konsola kısa bir
+// İngilizce mesaj yazılır.
 //
-// Aynı makinede birden fazla pod taklit etmek için farklı seed ile çalıştırın:
-//   dotnet run --no-launch-profile --urls http://localhost:5101 --ConnectivityProbe:InstanceIdSeed=pod-a
-//   (bu durumda ortam değişkenini kendiniz verin: set ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe)
+// Değerler burada yapılandırmadan okunuyor (appsettings.json -> "ConnectivityProbe" veya ortam değişkeni
+// ConnectivityProbe__MonitorUrl / ConnectivityProbe__AppKey); doğrudan metin olarak da verilebilir.
+// Aynı makinede birden fazla pod taklit etmek için farklı POD_NAME ile çalıştırın:
+//   set POD_NAME=sample-a & dotnet run --no-launch-profile --urls http://localhost:5101
+
+using ConnectivityProbe;
 
 var builder = WebApplication.CreateBuilder(args);
+
+ConnectivityProbeAgent.Start(
+    monitorUrl: builder.Configuration["ConnectivityProbe:MonitorUrl"] ?? "",
+    appKey: builder.Configuration["ConnectivityProbe:AppKey"] ?? "",
+    appName: "ConnectivityProbe Sample API");
+
 var app = builder.Build();
-
-app.MapGet("/", () => Results.Text(
-    "ConnectivityProbe.SampleApi\n\n" +
-    "  GET /connectivity-probe/discover?host=localhost:5078                                  (yalnızca telnet)\n" +
-    "  GET /connectivity-probe/discover?host=http://localhost:5078&usesConnectivityProbe=true (telnet + hedefin pod keşfi)\n" +
-    "  GET /connectivity-probe/identity\n"));
-
+app.MapGet("/", () => "ConnectivityProbe.SampleApi");
 app.Run();

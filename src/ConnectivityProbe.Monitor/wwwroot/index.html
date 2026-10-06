@@ -15,13 +15,14 @@
     <div class="logo">CONNECTIVITY<span>monitor</span></div>
     <nav class="tabs">
       <button class="tab" data-tab="monitor">Monitör</button>
+      <button class="tab" data-tab="versions">Sürümler</button>
       <button class="tab" data-tab="defs">Tanımlar</button>
     </nav>
     <div class="spacer"></div>
     <div class="nav-tools" id="navTools">
       <label class="nav-search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></svg>
-        <input id="search" type="search" placeholder="Uygulama, URL, ekip, birim" autocomplete="off">
+        <input id="search" type="search" placeholder="Uygulama, anahtar, ekip, sürüm, cluster" autocomplete="off">
       </label>
       <label class="pill-toggle"><input id="onlyProblems" type="checkbox"><span>Sadece sorunlular</span></label>
     </div>
@@ -36,6 +37,9 @@
       <div id="billboard" class="billboard"></div>
       <div id="monitorList" class="rows"></div>
     </section>
+
+    <!-- Sürümler: cluster'lar ve her uygulamanın cluster bazında çalışan sürümleri -->
+    <section id="tab-versions" class="versions" hidden></section>
 
     <!-- Tanımlar: solda birim/ekip ağacı, ortada seçili ekibin ve ortak havuzun bağlantıları, sağda ekibin uygulamaları -->
     <section id="tab-defs" hidden>

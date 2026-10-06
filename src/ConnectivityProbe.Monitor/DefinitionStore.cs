@@ -22,6 +22,10 @@ public sealed class DefinitionStore
         _data = File.Exists(_path)
             ? JsonSerializer.Deserialize<DefinitionData>(File.ReadAllText(_path), Json) ?? new DefinitionData()
             : new DefinitionData();
+
+        // step 3: 2.0'da Discover modu kalktı; uygulamalar anahtarlarıyla kendini kaydeder. Anahtarı olmayan eski (Discover)
+        //         uygulama kayıtlarını kaldırıyoruz. Bağlantı havuzu, birimler ve ekipler olduğu gibi kalır.
+        if (_data.Apps.RemoveAll(a => string.IsNullOrWhiteSpace(a.AppKey)) > 0) Save();
     }
 
     /// <summary>Tanımların saklandığı dosyanın tam yolu (diğer kalıcı dosyalar aynı klasöre yazılır).</summary>
