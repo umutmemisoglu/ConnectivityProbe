@@ -1,7 +1,21 @@
 # ConnectivityProbe NuGet paketini yayınlama
 
-Pakete yalnızca kütüphane girer: `src/ConnectivityProbe` (discover + identity uçları ve platform adaptörleri).
+Pakete yalnızca kütüphane girer: `src/ConnectivityProbe` (discover + identity uçları, Strict agent ve platform adaptörleri).
 Monitor, örnek uygulama ve testler pakete girmez.
+
+## Kısa yol (kullanılan yöntem): GitHub Actions
+
+1. `src/ConnectivityProbe/CHANGELOG.md` dosyasına yeni sürümün bölümünü ekleyin (`## 1.2.0`, altında `### English` ve `### Türkçe`).
+2. `ConnectivityProbe.csproj` içindeki `<Version>` değerini artırın, commit edip `main`'e gönderin.
+3. Etiketi gönderin:
+   ```bash
+   git tag -a v1.2.0 -m "ConnectivityProbe 1.2.0"
+   git push origin v1.2.0
+   ```
+
+`.github/workflows/publish.yml` testleri çalıştırır, paketi etiketteki sürümle üretir ve nuget.org'a API anahtarı olmadan
+(Trusted Publishing) yükler. Ardından GitHub Releases sayfasında CHANGELOG'daki bölümden sürüm notunu oluşturur.
+Aşağıdaki adımlar bu yöntemin ayrıntıları ve elle yayınlama içindir.
 
 ## 1. Yayından önce kontrol
 

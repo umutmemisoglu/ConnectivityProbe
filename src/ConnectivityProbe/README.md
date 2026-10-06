@@ -1,236 +1,73 @@
 # ConnectivityProbe
 
-Bir uygulamanın **kendi içinden** (her pod / instance'ın içinden) başka sunuculara ve servislere erişebildiğini telnet benzeri
-TCP bağlantısıyla test etmesini ve bir servisin arkasında **kaç instance (pod) çalıştığının** bulunmasını sağlar.
+Test, **from inside every pod / server of your application**, whether it can reach its databases, queues and APIs, and
+find out **how many instances really run** behind a service.
 
-İki uç ekler:
+📖 Full documentation: **[English](https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/README.md)** ·
+**[Türkçe](https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/README.tr.md)**
 
-| Uç | Ne işe yarar |
-|---|---|
-| `GET /connectivity-probe/discover` | Bu pod'un içinden hedefe TCP testi; hedef de ConnectivityProbe kullanıyorsa hedefin pod'larını keşfeder. |
-| `GET /connectivity-probe/identity` | Bu instance'ın kimliği (pod başına sabit, pod'lar arasında farklı). Pod keşfi bununla yapılır. |
+## Two modes
 
-> *English summary:* adds `/connectivity-probe/discover` (TCP reachability check from inside each instance, plus instance
-> discovery of targets that also use ConnectivityProbe) and `/connectivity-probe/identity`. In **strict mode**
-> (`MonitorUrl` + `AppKey`) every instance pulls its checks from ConnectivityProbe Monitor, runs them locally and reports
-> back, so the instance count is exact. Works on ASP.NET Core 2.1–10, IIS / classic ASP.NET, OWIN and non-web apps.
-> Endpoints are disabled until you set an access key or explicitly allow anonymous access.
+| | Discover | Strict (1.1.0+) |
+|---|---|---|
+| How | ConnectivityProbe Monitor calls your app's URL; the load balancer picks a pod | Every pod pulls its checks from the Monitor with an **app key**, runs them locally and reports back |
+| Pod count | Estimated (with a confidence) | **Exact** |
+| Needs | Endpoints enabled (`AccessKey` or `AllowAnonymous`) | `MonitorUrl` + `AppKey` |
+| Apps without HTTP (workers) | No | Yes |
 
-## Kurulum
+## Quick start
 
 ```bash
 dotnet add package ConnectivityProbe
 ```
 
-| Uygulama türü | Paketteki hedef | Devreye alma |
-|---|---|---|
-| **ASP.NET Core / .NET 8, 9, 10** | `net8.0` | `app.UseConnectivityProbe();` **veya** kodsuz: ortam değişkeni `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe` |
-| **ASP.NET Core 2.1 – 7** | `netstandard2.0` | Aynı |
-| **IIS / klasik ASP.NET** (MVC 5, Web API 2, WebForms) — .NET Framework 4.6.2+ | `net462` | **Hiçbir şey.** DLL `bin`'e girince kendini kaydeder (Integrated pipeline). |
-| **OWIN self-host** | `net462` / `netstandard2.0` | `app.Use(typeof(ConnectivityProbeOwinMiddleware));` |
-| **Web sunucusu olmayan uygulama** (Windows Service, worker, console) | hepsi | `var probe = ConnectivityProbeListener.Start();` (kapanırken `probe?.Dispose()`) |
-
-.NET Framework hedefinin **hiçbir NuGet bağımlılığı yoktur** (binding redirect gerekmez).
-
-### ASP.NET Core (kodla)
+**ASP.NET Core 6 – 10**
 
 ```csharp
 using ConnectivityProbe;
 
 var app = builder.Build();
-
-// HTTPS yönlendirmesinden ve uygulamanın yetkilendirmesinden önce ekleyin; uçlar kendi anahtarıyla korunur.
-app.UseConnectivityProbe(options =>
-{
-    options.Info["app"] = "my-service";       // identity yanıtına eklenecek sabit bilgi (isteğe bağlı)
-});
-
-app.UseHttpsRedirection();
-// ...
+app.UseConnectivityProbe();          // early in the pipeline, before UseHttpsRedirection
 ```
 
-Ayarlar ayrıca yapılandırmadan okunur (`appsettings.json` → `"ConnectivityProbe"` bölümü, ortam değişkenleri
-`ConnectivityProbe__<Ad>`); `UseConnectivityProbe` içindeki atamalar bunların üzerine yazar.
+**ASP.NET Core 2.1 – 5**: `app.UseConnectivityProbe();` as the first line of `Startup.Configure`.
+**Any ASP.NET Core 2.1 – 10 without code**: set the environment variable `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe`.
+**Classic ASP.NET on IIS (.NET Framework 4.6.2+)**: nothing to code; the module registers itself. Settings go to `web.config` `<appSettings>`.
+**OWIN**: `app.Use(typeof(ConnectivityProbeOwinMiddleware));`
+**Worker / console / Windows Service**: `ConnectivityProbeAgent.Start()` (Strict) or `ConnectivityProbeListener.Start()` (endpoints).
 
-### Kubernetes
+**Settings** (environment variables shown; `appsettings.json` → `"ConnectivityProbe"` and `web.config` → `ConnectivityProbe:<Name>` work too):
 
-```yaml
-env:
-  - name: ConnectivityProbe__AccessKey               # tüm uygulamalarda ve Monitor'de aynı ortak anahtar
-    valueFrom: { secretKeyRef: { name: connectivity-probe, key: access-key } }
-  - name: POD_NAME                                   # pod adları ve hostNetwork pod'larının ayrılması için önerilir
-    valueFrom: { fieldRef: { fieldPath: metadata.name } }
-  - name: POD_NAMESPACE
-    valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-  - name: NODE_NAME
-    valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+```bash
+# Strict mode
+ConnectivityProbe__MonitorUrl=https://monitor.example.com
+ConnectivityProbe__AppKey=cpk_...            # from the Monitor (keep it in a secret)
+
+# Discover endpoints: shared key, or AllowAnonymous=true on internal services only
+ConnectivityProbe__AccessKey=...
 ```
 
-Kodsuz kullanımda ayrıca `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe` ekleyin (başka hosting startup'lar varsa
-noktalı virgülle: `Diger.Assembly;ConnectivityProbe`).
+Endpoints are **disabled by default**: without `AccessKey` or `AllowAnonymous=true` they return 403.
 
-### IIS / klasik ASP.NET — `web.config`
+## Endpoints
 
-```xml
-<appSettings>
-  <add key="ConnectivityProbe:AccessKey" value="..." />
-  <add key="ConnectivityProbe:Info:cluster" value="prod-iis-1" />
-</appSettings>
-```
+- `GET /connectivity-probe/discover?host=sql01:1433`: TCP test from inside this instance.
+  Add `&usesConnectivityProbe=true` for a target that also uses ConnectivityProbe to discover its pods.
+- `GET /connectivity-probe/identity`: identity of this instance (stable `instanceId` per pod, IPs, pod name, version).
 
-## Strict mod (Monitor ile)
+---
 
-ConnectivityProbe Monitor'de uygulama **Strict** olarak tanımlanınca bir uygulama anahtarı üretilir. Uygulamaya iki ayar verin:
+## Türkçe özet
 
-```yaml
-env:
-  - name: ConnectivityProbe__MonitorUrl
-    value: https://monitor.example.com
-  - name: ConnectivityProbe__AppKey                  # Monitor'deki uygulama anahtarı
-    valueFrom: { secretKeyRef: { name: connectivity-probe, key: app-key } }
-```
+Uygulamanızın **her pod'unun / sunucusunun içinden** veritabanlarına, kuyruklara ve API'lere erişebildiğini test eder ve bir
+servisin arkasında **gerçekte kaç instance çalıştığını** bulur.
 
-Bu iki ayar verilince her pod'da arka planda bir iş çalışır. Kod yazmak gerekmez; ASP.NET Core'da `UseConnectivityProbe()` veya
-hosting startup, IIS'te otomatik çalışır.
+- **Discover:** ConnectivityProbe Monitor uygulamanın adresine gider; pod sayısı tahminidir.
+- **Strict (1.1.0+):** Her pod, Monitor'deki **uygulama anahtarıyla** tanımlarını çeker, kendi içinden test eder ve
+  sonucu gönderir; pod sayısı kesindir. HTTP'si olmayan worker'larda da çalışır.
 
-1. Her 10 saniyede Monitor'e "bu pod yaşıyor" bildirimi gönderir ve uygulamanın bağlantı tanımlarını alır.
-2. Test zamanı gelince (Monitor'ün aralığı, varsayılan 30 sn) veya Monitor'de "Şimdi test et"e basılınca her bağlantıyı **bu
-   pod'un içinden** test eder (discover ucuyla aynı mantık) ve sonucu gönderir.
-3. Uygulama düzgün kapanırken Monitor'e "kapanıyorum" bildirir; deploy ve scale-down alarm üretmez.
+Kurulum: `dotnet add package ConnectivityProbe`; ASP.NET Core'da `app.UseConnectivityProbe();`, IIS'te kod gerekmez.
+Strict mod için `ConnectivityProbe__MonitorUrl` ve `ConnectivityProbe__AppKey` ayarlarını verin. Platform bazında ayrıntılı
+anlatım: **[Türkçe dokümantasyon](https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/README.tr.md)**.
 
-İstekler load balancer'dan geçmediği için **her pod kendini bildirir**: pod sayısı ve her pod'un sonucu kesindir (Discover
-modunda olasılıksaldır). HTTP'si olmayan uygulamalar (kuyruk tüketicileri, worker'lar) da izlenebilir:
-
-```csharp
-// Web sunucusu olmayan uygulamalarda başlarken ve kapanırken:
-var agent = ConnectivityProbeAgent.Start();   // ayarlar ortam değişkenlerinden / app.config'ten
-// ...
-agent?.Stop();                                 // Monitor'e "kapanıyorum" bildirir
-```
-
-| Ayar | Varsayılan | Amacı |
-|---|---|---|
-| `MonitorUrl` | – | Monitor'ün adresi. Pod'lar bu adrese erişebilmelidir. |
-| `AppKey` | – | Monitor'deki uygulama anahtarı. Pod'ların hangi uygulamaya ait olduğunu ve hangi tanımları alacağını belirler. Secret olarak verin. |
-| `Strict:IntervalSeconds` | Monitor'ünki (30) | Test aralığı (sn). |
-| `Strict:CommandPollSeconds` | 10 | Monitor'e bildirim sıklığı (sn). "Şimdi test et" en geç bu sürede etkisini gösterir. |
-
-Pod'lar Monitor'e ulaşamazsa uygulama loguna uyarı yazılır (`ConnectivityProbe` kategorisi) ve bir sonraki bildirimde tekrar
-denenir; Monitor'de pod önce "bildirim gecikti", birkaç tur sonra "eksik" görünür.
-
-## Güvenlik
-
-**Varsayılan olarak kapalıdır:** ne `AccessKey` ne de `AllowAnonymous=true` verilmemişse uçlar her isteği `403` ile reddeder.
-
-- **Önerilen:** `AccessKey`. İstekler `X-ConnectivityProbe-Key` başlığında anahtarı taşımalıdır (yoksa `401`). Anahtarı
-  `appsettings.json`'a değil, secret / ortam değişkeni olarak verin.
-- `AllowAnonymous=true`: yalnızca dışarıya açık olmayan iç servislerde. **discover ucu, pod'un içinden verilen adrese TCP
-  bağlantısı açtırır**; dışarıdan erişilebilen bir serviste anahtarsız bırakmayın ve ingress'te `/connectivity-probe` yolunu
-  dışarıya kapatın.
-- `AllowedTargets`: bağlanılabilecek hedefleri kısıtlar (`sql01:1433`, `redis:*`, `*.svc.cluster.local:443`, `*.lan:*`).
-- `MaxConcurrentDiscover` (varsayılan 20): aynı anda işlenen discover isteği sınırı; aşan istekler `429` alır.
-- `identity` ucu pod IP'lerini, makine adını, işletim sistemi/.NET sürümünü ve yalnızca `IdentityEnvironmentVariables`
-  listesindeki ortam değişkenlerini döner (gizli bilgi sızmasın diye diğerleri hiç okunmaz). İstemiyorsanız
-  `EnableIdentity=false` (bu durumda bu uygulamanın pod'ları keşfedilemez).
-
-## Uçlar
-
-Hepsi `GET`, yanıt JSON, önbelleğe alınmaz. Taban yol varsayılan olarak `/connectivity-probe` (uygulama köküne göre).
-Tüm yanıtlarda (hata yanıtları dahil) `X-ConnectivityProbe: 1` başlığı bulunur; böylece "anahtar yanlış" ile "burada
-ConnectivityProbe yok" ayırt edilir.
-
-### `GET /connectivity-probe/discover`
-
-```
-/connectivity-probe/discover?host=sql01:1433                                          → yalnızca TCP testi
-/connectivity-probe/discover?host=https://orders.prod.svc&usesConnectivityProbe=true  → TCP + hedefin pod keşfi
-```
-
-1. **Her durumda önce TCP.** İsim çözülür; her IP ve ismin kendisi aynı anda denenir. Port kapalıysa hedefe **hiç HTTP isteği
-   gönderilmez** (`targetKind: "unreachable"`), nedeni `tcp` raporunda yazar (timeout, reddedildi, DNS).
-2. `usesConnectivityProbe` verilmediyse (DB, Redis, SMTP, dış API) burada biter: `targetKind: "tcp"`.
-3. `usesConnectivityProbe=true` ise hedefin identity ucuna her seferinde **yeni bağlantıyla** istek atılır, tekrar eden
-   kimlikler ayıklanarak hedefin pod'ları bulunur; yeni pod çıkmayı kesince durulur (adaptive).
-4. Hedefte ConnectivityProbe yoksa veya istekler `401/403` ile reddediliyorsa ilk 3 istekten sonra bırakılır.
-
-| Parametre | Varsayılan | Açıklama |
-|---|---|---|
-| `host` | (zorunlu) | Sunucu adı, IP, `sunucu:port` veya tam URL (`https://x.com/`). IPv6: `[::1]:80`. |
-| `port` | host'taki port | 1–65535. URL'de port yoksa https 443, http 80. |
-| `usesConnectivityProbe` | `false` | Hedef de ConnectivityProbe kullanıyorsa `true`: pod keşfi yapılır. |
-| `timeoutMs` | 5000 | Tek bağlantının / isteğin zaman aşımı. Üst sınır `MaxTimeoutMs`. |
-| `attempts` | `MaxAttempts` | Pod keşfinde en fazla identity isteği. |
-| `confidence` | 0.99 | Pod keşfi: "görmediğim başka pod yok" olasılığı (0.5–0.999). |
-| `scheme` | URL'nin şeması / `http` | Pod keşfi: `http` veya `https`. |
-
-`targetKind`: `tcp`, `unreachable`, `connectivityProbe` (pod'lar `instances[]` içinde), `connectivityProbeError` (hedefte
-ConnectivityProbe var ama reddetti; nedeni `errors` içinde), `other` (hedefte ConnectivityProbe yok).
-
-Yanıtta ayrıca: testi yapan instance (`executedByInstanceId`, `executedByMachineName`), `probeVersion`, `tcp` raporu,
-`distinctInstances`, `attemptsMade`, `succeeded`/`failed`/`errors`, `converged`, `confidence` (tahmin), `stoppedEarly`,
-`truncated` ve `notes` (ör. tüm yanıtlar tek pod'dan geldiyse: *session affinity açık olabilir* uyarısı).
-
-**Pod sayımının varsayımı:** load balancer her yeni bağlantıyı pod'lara dağıtmalıdır (Kubernetes Service ve ingress'ler
-varsayılan olarak böyledir). Session affinity açıksa hep aynı pod görülür; bu durumda `notes` uyarısı döner.
-`d` pod görülüp üst üste `k` istekte yeni pod çıkmadıysa gizli bir pod kalma ihtimali `(d/(d+1))^k`'dir (ör. 3 pod, %99 → 17 istek).
-
-### `GET /connectivity-probe/identity`
-
-`instanceId` (makine/pod adından türetilen 12 karakterlik sabit kimlik), `machineName`, `processId`, `startedAtUtc`,
-`uptimeSeconds`, `localAddresses`, `os`, `framework`, `probeVersion`, `environment` (seçili ortam değişkenleri), `info`
-(`Info:*` ayarları), `request` (`remoteIp`, `host`, `X-Forwarded-For/Host`).
-
-### Hata kodları
-
-| Kod | Ne zaman |
-|---|---|
-| `400` | `host` eksik/geçersiz, port belirlenemedi, `confidence` veya `scheme` geçersiz. |
-| `401` | `AccessKey` tanımlı ve `X-ConnectivityProbe-Key` başlığı yok/yanlış. |
-| `403` | Yapılandırılmamış (ne `AccessKey` ne `AllowAnonymous`) veya hedef `AllowedTargets` listesinde değil. |
-| `429` | Aynı anda işlenen discover isteği `MaxConcurrentDiscover` sınırında; biraz sonra tekrar deneyin. |
-
-Hata gövdesi her zaman `{"error": "..."}` biçimindedir.
-
-## Ayarlar
-
-`appsettings.json`'da `"ConnectivityProbe": { ... }`, ortam değişkeninde `ConnectivityProbe__<Ad>`, `web.config`/`app.config`
-`appSettings`'te `ConnectivityProbe:<Ad>`. Ortam değişkeni `web.config`'teki aynı ayarı ezer.
-
-| Ayar | Varsayılan | Amacı |
-|---|---|---|
-| `Enabled` | `true` | `false` ise uçlar tamamen kapanır. |
-| `AccessKey` | boş | Paylaşılan erişim anahtarı (önerilir). |
-| `AllowAnonymous` | `false` | Anahtarsız erişime açıkça izin verir. |
-| `AllowedTargets` | boş | İzin verilen hedefler (virgülle veya dizi). Boşsa her hedef serbest. |
-| `MaxConcurrentDiscover` | 20 | Aynı anda işlenen discover isteği (0 = sınırsız). |
-| `Path` | `/connectivity-probe` | Uçların taban yolu. |
-| `DefaultTimeoutMs` / `MaxTimeoutMs` | 5000 / 30000 | `timeoutMs` varsayılanı ve üst sınırı. |
-| `MaxAttempts` | 100 | Pod keşfinde en fazla identity isteği. |
-| `MaxRequestDurationSeconds` | 60 | Tek isteğin toplam süre sınırı; aşılırsa `truncated: true`. |
-| `MaxAddresses` | 64 | Bir isim için test edilecek en fazla IP. |
-| `EnableIdentity` | `true` | `identity` ucunu açar/kapatır. |
-| `InstanceIdSeed` | boş | `instanceId`'ye eklenir (aynı makine adını paylaşan kopyalar için). |
-| `IdentityEnvironmentVariables` | `POD_NAME, POD_NAMESPACE, POD_IP, NODE_NAME, CLUSTER_NAME, HOSTNAME, APP_POOL_ID, ASPNETCORE_ENVIRONMENT` | `identity` yanıtına kopyalanan ortam değişkenleri. |
-| `Info:<ad>` | – | `identity` yanıtına eklenen sabit bilgiler. |
-| `ListenerPrefixes` | `http://+:8099/` | Yalnızca `ConnectivityProbeListener`: dinlenecek adresler. |
-| `AutoRegister` | `true` | Yalnızca IIS: `false` ise modül kendini kaydetmez. |
-| `MonitorUrl`, `AppKey`, `Strict:*` | – | Strict mod (bkz. yukarıdaki bölüm). |
-
-Kodda ayrıca `options.Log = (level, message) => ...` ile log çıkışı verilebilir. ASP.NET Core'da verilmezse uygulamanın
-`ILogger`'ına `ConnectivityProbe` kategorisiyle yazılır: reddedilen istekler `Warning`, tamamlanan discover istekleri `Information`.
-
-## Platform notları
-
-- **IIS ve Strict mod:** IIS, istek gelmeyen uygulama havuzunu varsayılan olarak 20 dakika sonra durdurur; arka plan işi de durur ve
-  pod "eksik" görünür. Strict modda uygulama havuzunda `Start Mode = AlwaysRunning`, `Idle Time-out = 0` ve sitede
-  `Preload Enabled = true` ayarlayın.
-- **OWIN ve Strict mod:** OWIN'de standart bir kapanış olayı yoktur; kapanırken `ConnectivityProbeAgent.Current?.Stop()` çağırın
-  (çağrılmazsa pod birkaç tur sonra "eksik" görünür).
-- **IIS Classic pipeline:** `web.config` → `<system.web><httpModules><add name="ConnectivityProbe" type="ConnectivityProbe.ConnectivityProbeModule, ConnectivityProbe" /></httpModules></system.web>` ve `ConnectivityProbe:AutoRegister=false`.
-- **ConnectivityProbeListener (Windows):** `http://+:8099/` yönetici yetkisi ister; `netsh http add urlacl url=http://+:8099/ user="NT AUTHORITY\NETWORK SERVICE"` veya `ListenerPrefixes=http://localhost:8099/`.
-- **.NET Framework 4.6.2 – 4.7 ve HTTPS hedefler:** TLS 1.2 açık olmalı (`httpRuntime targetFramework="4.7"+` veya `ServicePointManager.SecurityProtocol`).
-- Self-signed sertifikalı HTTPS hedeflerde pod keşfi desteklenmez (TCP testi çalışır).
-
-## Lisans
-
-MIT. Copyright (c) 2026 Fatih Umut Memişoğlu.
+License / Lisans: MIT © 2026 Fatih Umut Memişoğlu
