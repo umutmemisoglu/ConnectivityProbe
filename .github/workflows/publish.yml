@@ -1,0 +1,51 @@
+# ConnectivityProbe paketini nuget.org'a yayınlar (Trusted Publishing: API anahtarı gerekmez).
+#
+# Tetikleme: "v" ile başlayan bir etiket gönderildiğinde, ör.:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+# Paket sürümü etiketten alınır (v1.0.0 -> 1.0.0). Elle çalıştırmak için Actions sekmesinden "Run workflow".
+#
+# nuget.org tarafında bu depo ve "publish.yml" dosya adı için bir Trusted Publishing policy tanımlı olmalıdır.
+
+name: publish
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # nuget.org'a kimlik kanıtı (OIDC) için gerekli
+  contents: read
+
+jobs:
+  publish:
+    # net462 hedefi de derlendiği için Windows kullanılıyor.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Test
+        run: dotnet test tests/ConnectivityProbe.Tests -c Release
+
+      - name: Pack
+        shell: bash
+        run: |
+          # Etiketle çalıştıysa sürümü etiketten al (v1.2.3 -> 1.2.3); elle çalıştırıldıysa csproj'daki sürüm kullanılır.
+          VERSION_ARG=""
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION_ARG="-p:Version=${GITHUB_REF_NAME#v}"; fi
+          dotnet pack src/ConnectivityProbe/ConnectivityProbe.csproj -c Release -o artifacts -p:ContinuousIntegrationBuild=true $VERSION_ARG
+
+      # Trusted Publishing: GitHub'ın verdiği kimlikle nuget.org'dan kısa ömürlü bir anahtar alınır.
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: umut92
+
+      - name: Push
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

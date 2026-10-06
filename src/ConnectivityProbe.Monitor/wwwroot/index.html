@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connectivity Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Üst menü: sayfanın üstünde saydam, aşağı kaydırınca koyulaşır -->
+  <header class="topbar" id="topbar">
+    <div class="logo">CONNECTIVITY<span>monitor</span></div>
+    <nav class="tabs">
+      <button class="tab" data-tab="monitor">Monitör</button>
+      <button class="tab" data-tab="defs">Tanımlar</button>
+    </nav>
+    <div class="spacer"></div>
+    <div class="nav-tools" id="navTools">
+      <label class="nav-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></svg>
+        <input id="search" type="search" placeholder="Uygulama, URL, ekip, birim" autocomplete="off">
+      </label>
+      <label class="pill-toggle"><input id="onlyProblems" type="checkbox"><span>Sadece sorunlular</span></label>
+    </div>
+    <span id="meta" class="meta"></span>
+    <button id="runNow" class="btn primary">Şimdi test et</button>
+  </header>
+
+  <main>
+    <!-- Monitör: öne çıkan uygulama (billboard) + her ekip için yatay kayan kart satırları -->
+    <section id="tab-monitor">
+      <div id="billboard" class="billboard"></div>
+      <div id="monitorList" class="rows"></div>
+    </section>
+
+    <!-- Tanımlar: solda birim/ekip ağacı, ortada seçili ekibin ve ortak havuzun bağlantıları, sağda ekibin uygulamaları -->
+    <section id="tab-defs" hidden>
+      <div class="defs-grid">
+        <aside class="panel">
+          <div class="panel-head">
+            <h2>Birimler ve ekipler</h2>
+            <button id="addUnit" class="btn small">+ Birim</button>
+          </div>
+          <div id="tree"></div>
+        </aside>
+        <div class="panel" id="poolPanel"></div>
+        <div class="panel" id="appsPanel"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Uygulama detayı: karta tıklayınca açılır -->
+  <dialog id="appModal" class="nf-modal">
+    <div id="appModalBody"></div>
+  </dialog>
+
+  <dialog id="dlg">
+    <form id="dlgForm">
+      <h3 id="dlgTitle"></h3>
+      <div id="dlgFields"></div>
+      <p id="dlgError" class="error"></p>
+      <div class="dlg-actions">
+        <button type="button" id="dlgCancel" class="btn">Vazgeç</button>
+        <button type="submit" class="btn primary">Kaydet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

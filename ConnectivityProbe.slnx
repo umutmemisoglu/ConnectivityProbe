@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/ConnectivityProbe.SampleApi/ConnectivityProbe.SampleApi.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/ConnectivityProbe.Monitor/ConnectivityProbe.Monitor.csproj" />
+    <Project Path="src/ConnectivityProbe/ConnectivityProbe.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ConnectivityProbe.Tests/ConnectivityProbe.Tests.csproj" />
+  </Folder>
+</Solution>

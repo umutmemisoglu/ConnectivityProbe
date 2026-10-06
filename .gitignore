@@ -1,0 +1,14 @@
+# Derleme çıktıları
+bin/
+obj/
+artifacts/
+TestResults/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Monitor'ün çalışma verisi: kayıtlı uygulamalar, bağlantılar (iç sunucu adları) ve pod durumu. Depoya girmemeli.
+src/ConnectivityProbe.Monitor/data/

@@ -1,0 +1,87 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hedefler (NuGet her uygulamaya uygun olanı kendisi seçer):
+      netstandard2.0 : ASP.NET Core 2.1 - 7 (middleware + otomatik aktivasyon), OWIN, kendi dinleyicisi
+      net462         : .NET Framework 4.6.2+ : IIS / klasik ASP.NET (otomatik IHttpModule), OWIN, Windows Service.
+                       Hiçbir NuGet bağımlılığı yoktur; bin klasörüne kopyalamak yeterlidir.
+      net8.0         : .NET 8+ (ASP.NET Core paylaşılan framework'ü ile)
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net462;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ConnectivityProbe</RootNamespace>
+    <AssemblyName>ConnectivityProbe</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    NuGet paketi. Sürüm tek yerden yönetilir: yeni sürüm yayınlarken yalnızca <Version> değiştirilir (bkz. PUBLISHING.md).
+    dotnet pack -c Release çıktısı: ConnectivityProbe.<sürüm>.nupkg + .snupkg (hata ayıklama sembolleri).
+  -->
+  <PropertyGroup>
+    <PackageId>ConnectivityProbe</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Fatih Umut Memişoğlu</Authors>
+    <Copyright>Copyright (c) 2026 Fatih Umut Memişoğlu</Copyright>
+    <!-- Açık kaynak lisansı (SPDX kimliği). Tam metin: depo kökündeki LICENSE dosyası. -->
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/umutmemisoglu/ConnectivityProbe</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/umutmemisoglu/ConnectivityProbe</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Title>ConnectivityProbe</Title>
+    <Description>Lets an application test, from inside each of its own pods/instances, whether it can reach other servers (telnet-style TCP check), and discover how many instances run behind a service. Exposes two endpoints: /connectivity-probe/discover and /connectivity-probe/identity. Works with ASP.NET Core 2.1-10 (zero-code via hosting startup), IIS / classic ASP.NET (zero-code IHttpModule), OWIN and non-web apps. Secure by default (access key or explicit opt-in).</Description>
+    <PackageTags>connectivity;telnet;tcp;health;diagnostics;kubernetes;pods;discovery;aspnetcore;iis;owin</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Bkz. CHANGELOG.md</PackageReleaseNotes>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Tüm public üyeler belgelenmiş değil; eksik XML yorumu uyarısı paketi engellemesin. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Deterministic>true</Deterministic>
+    <!-- CI build'lerinde yol bilgisinin pakete girmemesi için: dotnet pack -p:ContinuousIntegrationBuild=true -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="CHANGELOG.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ConnectivityProbe.Tests" />
+  </ItemGroup>
+
+  <!--
+    ASP.NET Core 2.1 - 7: 2.1 soyutlamaları (en düşük ortak sürüm). 2.2.0 kullanılamaz: ASP.NET Core 2.1'in metapaketi bu
+    paketleri "< 2.2.0" ile sabitler ve sürüm çakışması (NU1107) verir. Daha yeni hostlarda kendi sürümleri otomatik kullanılır.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.1.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="2.1.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.1.1" />
+  </ItemGroup>
+
+  <!-- .NET Framework: yalnızca framework'ün kendi parçaları (System.Web, System.Configuration). -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
+    <Reference Include="System.Web" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- ASP.NET Core adaptörü .NET Framework derlemesinde yer almaz (orada IIS modülü kullanılır). -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
+    <Compile Remove="AspNetCore\**" />
+  </ItemGroup>
+
+  <!-- IIS / System.Web adaptörü yalnızca .NET Framework derlemesinde vardır. -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net462'">
+    <Compile Remove="SystemWeb\**" />
+  </ItemGroup>
+
+</Project>
