@@ -11,8 +11,10 @@ TCP bağlantısıyla test etmesini ve bir servisin arkasında **kaç instance (p
 | `GET /connectivity-probe/identity` | Bu instance'ın kimliği (pod başına sabit, pod'lar arasında farklı). Pod keşfi bununla yapılır. |
 
 > *English summary:* adds `/connectivity-probe/discover` (TCP reachability check from inside each instance, plus instance
-> discovery of targets that also use ConnectivityProbe) and `/connectivity-probe/identity`. Works on ASP.NET Core 2.1–10,
-> IIS / classic ASP.NET, OWIN and non-web apps. Disabled until you set an access key or explicitly allow anonymous access.
+> discovery of targets that also use ConnectivityProbe) and `/connectivity-probe/identity`. In **strict mode**
+> (`MonitorUrl` + `AppKey`) every instance pulls its checks from ConnectivityProbe Monitor, runs them locally and reports
+> back, so the instance count is exact. Works on ASP.NET Core 2.1–10, IIS / classic ASP.NET, OWIN and non-web apps.
+> Endpoints are disabled until you set an access key or explicitly allow anonymous access.
 
 ## Kurulum
 
@@ -75,6 +77,46 @@ noktalı virgülle: `Diger.Assembly;ConnectivityProbe`).
   <add key="ConnectivityProbe:Info:cluster" value="prod-iis-1" />
 </appSettings>
 ```
+
+## Strict mod (Monitor ile)
+
+ConnectivityProbe Monitor'de uygulama **Strict** olarak tanımlanınca bir uygulama anahtarı üretilir. Uygulamaya iki ayar verin:
+
+```yaml
+env:
+  - name: ConnectivityProbe__MonitorUrl
+    value: https://monitor.example.com
+  - name: ConnectivityProbe__AppKey                  # Monitor'deki uygulama anahtarı
+    valueFrom: { secretKeyRef: { name: connectivity-probe, key: app-key } }
+```
+
+Bu iki ayar verilince her pod'da arka planda bir iş çalışır. Kod yazmak gerekmez; ASP.NET Core'da `UseConnectivityProbe()` veya
+hosting startup, IIS'te otomatik çalışır.
+
+1. Her 10 saniyede Monitor'e "bu pod yaşıyor" bildirimi gönderir ve uygulamanın bağlantı tanımlarını alır.
+2. Test zamanı gelince (Monitor'ün aralığı, varsayılan 30 sn) veya Monitor'de "Şimdi test et"e basılınca her bağlantıyı **bu
+   pod'un içinden** test eder (discover ucuyla aynı mantık) ve sonucu gönderir.
+3. Uygulama düzgün kapanırken Monitor'e "kapanıyorum" bildirir; deploy ve scale-down alarm üretmez.
+
+İstekler load balancer'dan geçmediği için **her pod kendini bildirir**: pod sayısı ve her pod'un sonucu kesindir (Discover
+modunda olasılıksaldır). HTTP'si olmayan uygulamalar (kuyruk tüketicileri, worker'lar) da izlenebilir:
+
+```csharp
+// Web sunucusu olmayan uygulamalarda başlarken ve kapanırken:
+var agent = ConnectivityProbeAgent.Start();   // ayarlar ortam değişkenlerinden / app.config'ten
+// ...
+agent?.Stop();                                 // Monitor'e "kapanıyorum" bildirir
+```
+
+| Ayar | Varsayılan | Amacı |
+|---|---|---|
+| `MonitorUrl` | – | Monitor'ün adresi. Pod'lar bu adrese erişebilmelidir. |
+| `AppKey` | – | Monitor'deki uygulama anahtarı. Pod'ların hangi uygulamaya ait olduğunu ve hangi tanımları alacağını belirler. Secret olarak verin. |
+| `Strict:IntervalSeconds` | Monitor'ünki (30) | Test aralığı (sn). |
+| `Strict:CommandPollSeconds` | 10 | Monitor'e bildirim sıklığı (sn). "Şimdi test et" en geç bu sürede etkisini gösterir. |
+
+Pod'lar Monitor'e ulaşamazsa uygulama loguna uyarı yazılır (`ConnectivityProbe` kategorisi) ve bir sonraki bildirimde tekrar
+denenir; Monitor'de pod önce "bildirim gecikti", birkaç tur sonra "eksik" görünür.
 
 ## Güvenlik
 
@@ -172,12 +214,18 @@ Hata gövdesi her zaman `{"error": "..."}` biçimindedir.
 | `Info:<ad>` | – | `identity` yanıtına eklenen sabit bilgiler. |
 | `ListenerPrefixes` | `http://+:8099/` | Yalnızca `ConnectivityProbeListener`: dinlenecek adresler. |
 | `AutoRegister` | `true` | Yalnızca IIS: `false` ise modül kendini kaydetmez. |
+| `MonitorUrl`, `AppKey`, `Strict:*` | – | Strict mod (bkz. yukarıdaki bölüm). |
 
 Kodda ayrıca `options.Log = (level, message) => ...` ile log çıkışı verilebilir. ASP.NET Core'da verilmezse uygulamanın
 `ILogger`'ına `ConnectivityProbe` kategorisiyle yazılır: reddedilen istekler `Warning`, tamamlanan discover istekleri `Information`.
 
 ## Platform notları
 
+- **IIS ve Strict mod:** IIS, istek gelmeyen uygulama havuzunu varsayılan olarak 20 dakika sonra durdurur; arka plan işi de durur ve
+  pod "eksik" görünür. Strict modda uygulama havuzunda `Start Mode = AlwaysRunning`, `Idle Time-out = 0` ve sitede
+  `Preload Enabled = true` ayarlayın.
+- **OWIN ve Strict mod:** OWIN'de standart bir kapanış olayı yoktur; kapanırken `ConnectivityProbeAgent.Current?.Stop()` çağırın
+  (çağrılmazsa pod birkaç tur sonra "eksik" görünür).
 - **IIS Classic pipeline:** `web.config` → `<system.web><httpModules><add name="ConnectivityProbe" type="ConnectivityProbe.ConnectivityProbeModule, ConnectivityProbe" /></httpModules></system.web>` ve `ConnectivityProbe:AutoRegister=false`.
 - **ConnectivityProbeListener (Windows):** `http://+:8099/` yönetici yetkisi ister; `netsh http add urlacl url=http://+:8099/ user="NT AUTHORITY\NETWORK SERVICE"` veya `ListenerPrefixes=http://localhost:8099/`.
 - **.NET Framework 4.6.2 – 4.7 ve HTTPS hedefler:** TLS 1.2 açık olmalı (`httpRuntime targetFramework="4.7"+` veya `ServicePointManager.SecurityProtocol`).

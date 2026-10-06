@@ -248,6 +248,18 @@ namespace ConnectivityProbe
         public static long GetLong(IDictionary<string, object?>? o, string key) =>
             o != null && o.TryGetValue(key, out var v) && v is double d ? (long)d : 0;
 
+        public static double? GetDouble(IDictionary<string, object?>? o, string key) =>
+            o != null && o.TryGetValue(key, out var v) && v is double d ? d : (double?)null;
+
+        public static bool GetBool(IDictionary<string, object?>? o, string key) =>
+            o != null && o.TryGetValue(key, out var v) && v is bool b && b;
+
+        /// <summary>Nesne dizisini döner (dizi değilse veya alan yoksa boş liste).</summary>
+        public static List<IDictionary<string, object?>> GetObjectList(IDictionary<string, object?>? o, string key) =>
+            o != null && o.TryGetValue(key, out var v) && v is List<object?> list
+                ? list.OfType<IDictionary<string, object?>>().ToList()
+                : new List<IDictionary<string, object?>>();
+
         public static IDictionary<string, object?>? GetObject(IDictionary<string, object?>? o, string key) =>
             o != null && o.TryGetValue(key, out var v) ? v as IDictionary<string, object?> : null;
 

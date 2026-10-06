@@ -78,6 +78,40 @@ namespace ConnectivityProbe
         /// </summary>
         public int MaxConcurrentDiscover { get; set; } = 20;
 
+        // ------------------------------------------------------------------ Strict mod
+
+        /// <summary>Strict mod: pod'ların tanımları çektiği ve sonuçları gönderdiği Monitor'ün uygulama anahtarı başlığı.</summary>
+        public const string AppKeyHeader = "X-ConnectivityProbe-AppKey";
+
+        /// <summary>
+        /// Strict mod: Monitor'ün adresi (ör. https://monitor.example.com). <see cref="AppKey"/> ile birlikte verilirse her pod
+        /// arka planda kendi bağlantı tanımlarını Monitor'den çeker, kendi içinde test eder ve sonuçları Monitor'e gönderir.
+        /// Böylece pod sayısı ve her pod'un sonucu kesin olarak bilinir. Ayar: ConnectivityProbe:MonitorUrl.
+        /// </summary>
+        public string? MonitorUrl { get; set; }
+
+        /// <summary>
+        /// Strict mod: Monitor'de uygulama tanımlanırken üretilen uygulama anahtarı. Pod'ların hangi uygulamaya ait olduğunu ve
+        /// hangi tanımları çekeceğini belirler. Secret / ortam değişkeni olarak verin. Ayar: ConnectivityProbe:AppKey.
+        /// </summary>
+        public string? AppKey { get; set; }
+
+        /// <summary>
+        /// Strict mod: test aralığı (sn). 0: Monitor'ün belirlediği aralık (varsayılan 30 sn) kullanılır.
+        /// Ayar: ConnectivityProbe:Strict:IntervalSeconds. Varsayılan: 0.
+        /// </summary>
+        public int StrictIntervalSeconds { get; set; }
+
+        /// <summary>
+        /// Strict mod: pod'un Monitor'e ne sıklıkla "yaşıyorum / yeni iş var mı" diye sorduğu (sn). Monitor'deki "Şimdi test et"
+        /// en geç bu sürede etkisini gösterir; pod'un canlı sayılması da bu bildirimlere bağlıdır.
+        /// Ayar: ConnectivityProbe:Strict:CommandPollSeconds. Varsayılan: 10.
+        /// </summary>
+        public int StrictPollSeconds { get; set; } = 10;
+
+        /// <summary>Strict mod etkin mi (MonitorUrl ve AppKey verilmiş mi).</summary>
+        public bool StrictEnabled => !string.IsNullOrWhiteSpace(MonitorUrl) && !string.IsNullOrWhiteSpace(AppKey);
+
         /// <summary>
         /// İsteğe bağlı log çıkışı. ASP.NET Core'da verilmezse uygulamanın ILogger'ına bağlanır; diğer platformlarda
         /// verilmezse log yazılmaz. Reddedilen istekler Warning, tamamlanan discover istekleri Information seviyesindedir.
@@ -160,6 +194,12 @@ namespace ConnectivityProbe
             if (s.TryGetValue("MaxConcurrentDiscover", out var concurrentText)
                 && int.TryParse(concurrentText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var concurrent))
                 o.MaxConcurrentDiscover = concurrent; // 0 = sınırsız
+
+            // step 2b: Strict mod.
+            if (s.TryGetValue("MonitorUrl", out var monitorUrl) && monitorUrl.Trim().Length > 0) o.MonitorUrl = monitorUrl.Trim().TrimEnd('/');
+            if (s.TryGetValue("AppKey", out var appKey) && appKey.Trim().Length > 0) o.AppKey = appKey.Trim();
+            if (TryPositive(s, "Strict:IntervalSeconds", out v)) o.StrictIntervalSeconds = v;
+            if (TryPositive(s, "Strict:CommandPollSeconds", out v)) o.StrictPollSeconds = v;
 
             // step 3: Listeler: "A,B" biçiminde tek değer veya "Liste:0", "Liste:1" biçiminde dizi.
             foreach (var t in ReadList(s, "AllowedTargets")) o.AllowedTargets.Add(t);

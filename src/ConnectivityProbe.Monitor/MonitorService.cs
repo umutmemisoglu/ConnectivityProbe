@@ -21,7 +21,15 @@ public sealed class MonitorService : BackgroundService
         public readonly Dictionary<string, TargetMemory> Targets = new();
         /// <summary>Bilinen pod'ların hepsinin görüldüğü son turdaki pod sayısı (deploy ile "pod çöktü"yü ayırmak için).</summary>
         public int ExpectedPods;
+        /// <summary>Strict mod: pod -> bildirim sıklığı (sn); pod'un canlı sayılıp sayılmayacağı buna göre değerlendirilir.</summary>
+        public readonly Dictionary<string, int> PollSeconds = new();
     }
+
+    /// <summary>Monitor'ün başladığı an: yeniden başladıktan hemen sonra pod'lar bildirim gönderene kadar "eksik" sayılmasın diye.</summary>
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
+
+    /// <summary>"Şimdi test et"e her basıldığında artar; Strict pod'lar değiştiğini görünce beklemeden test eder.</summary>
+    private long _runRequestId = DateTime.UtcNow.Ticks;
 
     private readonly DefinitionStore _store;
     private readonly PodStateStore _podState;
@@ -114,7 +122,11 @@ public sealed class MonitorService : BackgroundService
             Running = _running,
             Apps = defs.Apps.Select(a => _latest.TryGetValue(a.Id, out var s)
                 ? s
-                : new AppStatus { AppId = a.Id, Name = a.Name, BaseUrl = a.BaseUrl, Message = "Henüz test edilmedi" }).ToList()
+                : new AppStatus
+                {
+                    AppId = a.Id, Name = a.Name, BaseUrl = a.BaseUrl, Mode = a.Mode,
+                    Message = a.Mode == AppModes.Strict ? NoReportMessage : "Henüz test edilmedi"
+                }).ToList()
         };
     }
 
@@ -155,7 +167,10 @@ public sealed class MonitorService : BackgroundService
                 await gate.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    var status = await CheckAppAsync(app, defs, ct).ConfigureAwait(false);
+                    var status = app.Mode == AppModes.Strict
+                        ? await CheckStrictAppAsync(app, defs, ct).ConfigureAwait(false)
+                        : await CheckAppAsync(app, defs, ct).ConfigureAwait(false);
+                    status.Mode = app.Mode;
                     // Kontrol sürerken uygulama silindiyse sonucunu yazmıyoruz.
                     if (_store.Snapshot().Apps.Any(a => a.Id == app.Id)) _latest[app.Id] = status;
                 }
@@ -168,7 +183,7 @@ public sealed class MonitorService : BackgroundService
                     _log.LogError(ex, "Check failed for {App}", app.Name);
                     _latest[app.Id] = new AppStatus
                     {
-                        AppId = app.Id, Name = app.Name, BaseUrl = app.BaseUrl, State = "down",
+                        AppId = app.Id, Name = app.Name, BaseUrl = app.BaseUrl, Mode = app.Mode, State = "down",
                         Message = "Kontrol hatası: " + ex.Message, CheckedAtUtc = DateTime.UtcNow
                     };
                 }
@@ -247,7 +262,7 @@ public sealed class MonitorService : BackgroundService
             rt.Known[s.InstanceId] = new PodStatus
             {
                 InstanceId = s.InstanceId, MachineName = s.Identity.MachineName, Addresses = s.Identity.LocalAddresses,
-                StartedAtUtc = s.Identity.StartedAtUtc, Details = details, LastSeenUtc = cycleStart
+                StartedAtUtc = s.Identity.StartedAtUtc, Details = details, LastSeenUtc = cycleStart, ProbeVersion = s.Identity.ProbeVersion
             };
             rt.Missed[s.InstanceId] = 0;
         }
@@ -267,18 +282,7 @@ public sealed class MonitorService : BackgroundService
         if (seen.Count > 0 && rt.Known.Keys.All(seen.Contains)) rt.ExpectedPods = seen.Count;
 
         // Artık ilişkili olmayan bağlantıların ve bilinmeyen pod'ların eski sonuçlarını temizliyoruz.
-        lock (rt)
-        {
-            var attached = app.ConnectionIds.ToHashSet();
-            foreach (var key in rt.Results.Keys.ToList())
-            {
-                var sep = key.IndexOf('|');
-                if (!attached.Contains(key[..sep]) || !rt.Known.ContainsKey(key[(sep + 1)..])) rt.Results.Remove(key);
-            }
-            foreach (var connId in rt.Targets.Keys.Where(k => !attached.Contains(k)).ToList()) rt.Targets.Remove(connId);
-            foreach (var target in rt.Targets.Values.SelectMany(t => t.Pods.Values))
-                foreach (var podId in target.By.Keys.Where(k => !rt.Known.ContainsKey(k)).ToList()) target.By.Remove(podId);
-        }
+        lock (rt) CleanupResults(rt, app);
 
         status.PodCount = seen.Count;
         status.Converged = instances.Converged;
@@ -290,7 +294,7 @@ public sealed class MonitorService : BackgroundService
                 return new PodStatus
                 {
                     InstanceId = p.InstanceId, MachineName = p.MachineName, Addresses = p.Addresses, StartedAtUtc = p.StartedAtUtc,
-                    Details = p.Details, LastSeenUtc = p.LastSeenUtc, Seen = seen.Contains(p.InstanceId), MissedCycles = missed,
+                    Details = p.Details, LastSeenUtc = p.LastSeenUtc, ProbeVersion = p.ProbeVersion, Seen = seen.Contains(p.InstanceId), MissedCycles = missed,
                     State = seen.Contains(p.InstanceId) ? "up" : missed >= threshold ? "missing" : "unconfirmed"
                 };
             })
@@ -329,17 +333,7 @@ public sealed class MonitorService : BackgroundService
         var problems = new List<string>();
         var missing = status.Pods.Count(p => p.State == "missing");
         if (missing > 0) problems.Add($"{missing} pod eksik (üst üste {threshold}+ tur görünmedi)");
-        var failedCells = status.Connections.Sum(c => c.Cells.Count(x => x.Fresh && !x.Success));
-        if (failedCells > 0) problems.Add($"{failedCells} bağlantı testi başarısız");
-        var callErrors = status.Connections.Count(c => c.CallError != null);
-        if (callErrors > 0) problems.Add($"{callErrors} bağlantı test edilemedi");
-        // CP hedefinin bir pod'una üst üste birkaç tur erişilemediyse (hedef pod'u çöktü veya bu pod'dan ona yol yok) bu da sorundur.
-        foreach (var c in status.Connections)
-        {
-            var names = c.Cells.Where(x => x.Fresh).SelectMany(x => x.UnreachedTargets ?? new()).Where(u => u.Confirmed)
-                .Select(u => u.PodName ?? u.MachineName).Distinct().ToList();
-            if (names.Count > 0) problems.Add($"{c.Name}: hedefin {string.Join(", ", names)} pod'una erişilemiyor");
-        }
+        AddConnectionProblems(status, problems);
 
         var notes = new List<string>();
         var unconfirmed = status.Pods.Count(p => p.State == "unconfirmed");
@@ -359,6 +353,249 @@ public sealed class MonitorService : BackgroundService
     {
         rt.Known.Remove(podId);
         rt.Missed.Remove(podId);
+        rt.PollSeconds.Remove(podId);
+    }
+
+    // Artık ilişkili olmayan bağlantıların ve bilinmeyen pod'ların eski sonuçlarını siler. Çağıran rt üzerinde kilit tutmalıdır.
+    private static void CleanupResults(AppRuntime rt, AppDefinition app)
+    {
+        var attached = app.ConnectionIds.ToHashSet();
+        foreach (var key in rt.Results.Keys.ToList())
+        {
+            var sep = key.IndexOf('|');
+            if (!attached.Contains(key[..sep]) || !rt.Known.ContainsKey(key[(sep + 1)..])) rt.Results.Remove(key);
+        }
+        foreach (var connId in rt.Targets.Keys.Where(k => !attached.Contains(k)).ToList()) rt.Targets.Remove(connId);
+        foreach (var target in rt.Targets.Values.SelectMany(t => t.Pods.Values))
+            foreach (var podId in target.By.Keys.Where(k => !rt.Known.ContainsKey(k)).ToList()) target.By.Remove(podId);
+    }
+
+    // Bağlantı sonuçlarındaki sorunları (başarısız test, test edilemeyen bağlantı, erişilemeyen hedef pod'u) özetler.
+    private static void AddConnectionProblems(AppStatus status, List<string> problems)
+    {
+        var failedCells = status.Connections.Sum(c => c.Cells.Count(x => x.Fresh && !x.Success));
+        if (failedCells > 0) problems.Add($"{failedCells} bağlantı testi başarısız");
+        var callErrors = status.Connections.Count(c => c.CallError != null);
+        if (callErrors > 0) problems.Add($"{callErrors} bağlantı test edilemedi");
+        // CP hedefinin bir pod'una üst üste birkaç tur erişilemediyse (hedef pod'u çöktü veya bu pod'dan ona yol yok) bu da sorundur.
+        foreach (var c in status.Connections)
+        {
+            var names = c.Cells.Where(x => x.Fresh).SelectMany(x => x.UnreachedTargets ?? new()).Where(u => u.Confirmed)
+                .Select(u => u.PodName ?? u.MachineName).Distinct().ToList();
+            if (names.Count > 0) problems.Add($"{c.Name}: hedefin {string.Join(", ", names)} pod'una erişilemiyor");
+        }
+    }
+
+    // =============================================================================================
+    // Strict mod: her pod uygulama anahtarıyla kendini bildirir, testleri kendi içinde yapıp sonuçları gönderir.
+    // Pod sayısı = bildirim gönderen pod'lar (kesin); "eksik" kuralları Discover ile aynıdır.
+    // =============================================================================================
+
+    private const string NoReportMessage =
+        "Henüz hiçbir pod bildirim göndermedi. Uygulamada ConnectivityProbe 1.1+ yüklü ve ConnectivityProbe:MonitorUrl / ConnectivityProbe:AppKey tanımlı mı?";
+
+    /// <summary>"Şimdi test et"e her basıldığında değişen kimlik; Strict pod'lar değiştiğini görünce beklemeden test eder.</summary>
+    public string RunRequestId => Interlocked.Read(ref _runRequestId).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>"Şimdi test et": Discover uygulamaları için hemen tur başlatır, Strict pod'lara da beklemeden test etmelerini bildirir.</summary>
+    public void RequestRun()
+    {
+        Interlocked.Increment(ref _runRequestId);
+        Trigger();
+    }
+
+    /// <summary>
+    /// Strict pod'un bildirimini işler: pod'u canlı olarak işaretler, test sonuçları varsa pod'un hücrelerine yazar ve pod'a
+    /// uygulamanın güncel bağlantı tanımlarını döner.
+    /// </summary>
+    public AgentAssignment AcceptAgentReport(AppDefinition app, DefinitionData defs, AgentReport report)
+    {
+        var now = DateTime.UtcNow;
+        var identity = report.Identity;
+        var rt = _runtime.GetOrAdd(app.Id, _ => new AppRuntime());
+        var connections = app.ConnectionIds
+            .Select(id => defs.Connections.FirstOrDefault(c => c.Id == id))
+            .Where(c => c != null).Select(c => c!).ToList();
+
+        bool isNew;
+        lock (rt)
+        {
+            // step 1: Pod'u canlı olarak kaydediyoruz (yeni bir pod ise listeye girer).
+            isNew = !rt.Known.ContainsKey(identity.InstanceId);
+            var details = new Dictionary<string, string>(identity.Environment);
+            foreach (var kv in identity.Info) details[kv.Key] = kv.Value;
+            rt.Known[identity.InstanceId] = new PodStatus
+            {
+                InstanceId = identity.InstanceId, MachineName = identity.MachineName, Addresses = identity.LocalAddresses,
+                StartedAtUtc = identity.StartedAtUtc, Details = details, LastSeenUtc = now, ProbeVersion = identity.ProbeVersion
+            };
+            rt.Missed[identity.InstanceId] = 0;
+            rt.PollSeconds[identity.InstanceId] = Math.Clamp(report.PollSeconds, 1, 300);
+
+            // step 2: Test sonuçları geldiyse pod'un hücrelerine yazıyoruz (Discover moddaki hücrelerle aynı biçim).
+            foreach (var result in report.Run?.Results ?? new List<AgentResult>())
+            {
+                var conn = connections.FirstOrDefault(c => c.Id == result.ConnectionId);
+                if (conn == null) continue; // tanım bu arada uygulamadan çıkarılmış
+
+                var cell = result.Report?.Tcp != null
+                    ? CellFromReport(conn, result.Report, identity.InstanceId) with { CheckedAtUtc = now }
+                    : new PodConnectionCell { InstanceId = identity.InstanceId, Error = result.Error ?? "Test sonucu yok", CheckedAtUtc = now };
+                cell = StoreCell(rt, conn.Id, cell);
+
+                // CP hedefi: hangi hedef pod'una ne zamandır erişilemediğini güncelliyoruz.
+                if (conn.UsesConnectivityProbe && cell.Success && cell.TargetKind == ProbeTargetKind.ConnectivityProbe && cell.TargetPods != null)
+                    foreach (var updated in UpdateTargets(rt, conn.Id, new List<PodConnectionCell> { cell }, now))
+                        rt.Results[conn.Id + "|" + updated.InstanceId] = updated;
+            }
+        }
+
+        if (isNew)
+        {
+            _log.LogInformation("Strict pod {Pod} ({Machine}) joined app {App}", identity.InstanceId, identity.MachineName, app.Name);
+            SavePodState();
+        }
+
+        return new AgentAssignment(
+            app.Id, app.Name, Math.Max(5, _opt.IntervalSeconds), RunRequestId, Math.Max(500, _opt.ProbeTimeoutMs),
+            Math.Max(1, _opt.MaxInstanceAttempts), _opt.InstanceConfidence,
+            connections.Select(c => new AgentConnection(c.Id, c.Name, c.Host, c.Port, c.UsesConnectivityProbe)).ToList());
+    }
+
+    /// <summary>Strict pod düzgün kapanıyor: alarm vermeden listeden çıkarılır (deploy, scale-down).</summary>
+    public bool AgentGoodbye(string appId, string instanceId)
+    {
+        if (!_runtime.TryGetValue(appId, out var rt)) return false;
+        lock (rt)
+        {
+            if (!rt.Known.ContainsKey(instanceId)) return false;
+            Forget(rt, instanceId);
+            foreach (var key in rt.Results.Keys.Where(k => k.EndsWith("|" + instanceId, StringComparison.Ordinal)).ToList()) rt.Results.Remove(key);
+            foreach (var target in rt.Targets.Values.SelectMany(t => t.Pods.Values)) target.By.Remove(instanceId);
+        }
+        _log.LogInformation("Strict pod {Pod} left app {App}", instanceId, appId);
+        SavePodState();
+        return true;
+    }
+
+    /// <summary>
+    /// Strict uygulamanın durumunu pod bildirimlerinden hesaplar. Uygulamanın adresi verildiyse ayrıca Monitor'den dışarıdan
+    /// erişim (TCP) kontrol edilir.
+    /// </summary>
+    private async Task<AppStatus> CheckStrictAppAsync(AppDefinition app, DefinitionData defs, CancellationToken ct)
+    {
+        var rt = _runtime.GetOrAdd(app.Id, _ => new AppRuntime());
+        var now = DateTime.UtcNow;
+        var interval = TimeSpan.FromSeconds(Math.Max(5, _opt.IntervalSeconds));
+        var threshold = Math.Max(1, _opt.MissingAfterCycles);
+        var status = new AppStatus { AppId = app.Id, Name = app.Name, BaseUrl = app.BaseUrl, Mode = AppModes.Strict, CheckedAtUtc = now };
+
+        // step 1: Adres verildiyse Monitor'den dışarıdan erişim kontrolü (yalnızca telnet; pod sayısı bildirimlerden gelir).
+        string? urlProblem = null;
+        if (!string.IsNullOrWhiteSpace(app.BaseUrl) && Uri.TryCreate(app.BaseUrl, UriKind.Absolute, out var uri))
+        {
+            var tcp = await TcpProbe.ProbeAsync(uri.IdnHost, uri.Port, TimeSpan.FromMilliseconds(Math.Max(500, _opt.ProbeTimeoutMs)), ct).ConfigureAwait(false);
+            if (!tcp.Success) urlProblem = $"Uygulamanın adresine Monitor'den erişilemiyor ({uri.IdnHost}:{uri.Port}): {tcp.Error}";
+        }
+
+        var connections = app.ConnectionIds
+            .Select(id => defs.Connections.FirstOrDefault(c => c.Id == id))
+            .Where(c => c != null).Select(c => c!).ToList();
+        int up;
+        DateTime? lastReport;
+
+        lock (rt)
+        {
+            // step 2: Pod durumları bildirimin yaşına göre:
+            //   up          -> son bildirim, pod'un bildirim aralığının iki katından yeni
+            //   unconfirmed -> bildirim gecikti ama henüz eşik dolmadı
+            //   missing     -> üst üste MissingAfterCycles test aralığı boyunca bildirim yok (alarm)
+            // Monitor yeni başladıysa eski bildirim zamanları cezalandırılmaz (pod'lara bildirim için süre tanınır).
+            var states = new Dictionary<string, string>();
+            var justCrossed = new List<string>();
+            foreach (var p in rt.Known.Values)
+            {
+                var poll = rt.PollSeconds.TryGetValue(p.InstanceId, out var s) ? s : 10;
+                var age = now - (p.LastSeenUtc > _startedUtc ? p.LastSeenUtc : _startedUtc);
+                var isUp = age <= TimeSpan.FromSeconds(poll * 2 + 5);
+                var missed = isUp ? 0 : Math.Max(1, (int)(age.TotalSeconds / interval.TotalSeconds));
+                var previous = rt.Missed.TryGetValue(p.InstanceId, out var m) ? m : 0;
+                rt.Missed[p.InstanceId] = missed;
+                if (missed >= threshold && previous < threshold) justCrossed.Add(p.InstanceId);
+                states[p.InstanceId] = isUp ? "up" : missed >= threshold ? "missing" : "unconfirmed";
+            }
+            up = states.Count(kv => kv.Value == "up");
+
+            // step 3: Eşiği bu turda geçen pod'lar: pod sayısı korunduysa (yerine yenisi geldi, kapanış bildirimi gelmeden) alarmsız
+            //         düşürüyoruz; azaldıysa "eksik" kalır ve yalnızca "Pod listesini sıfırla" ile silinir (Discover'la aynı kural).
+            if (justCrossed.Count > 0 && up > 0 && up >= rt.ExpectedPods)
+                foreach (var id in justCrossed) { Forget(rt, id); states.Remove(id); }
+            if (up > 0 && states.Values.All(s => s == "up")) rt.ExpectedPods = up;
+
+            CleanupResults(rt, app);
+            lastReport = rt.Known.Count > 0 ? rt.Known.Values.Max(p => p.LastSeenUtc) : null;
+
+            status.Pods = rt.Known.Values
+                .Select(p => new PodStatus
+                {
+                    InstanceId = p.InstanceId, MachineName = p.MachineName, Addresses = p.Addresses, StartedAtUtc = p.StartedAtUtc,
+                    Details = p.Details, LastSeenUtc = p.LastSeenUtc, ProbeVersion = p.ProbeVersion,
+                    Seen = states[p.InstanceId] == "up", MissedCycles = rt.Missed.TryGetValue(p.InstanceId, out var m) ? m : 0,
+                    State = states[p.InstanceId]
+                })
+                .OrderBy(p => p.Details.TryGetValue("POD_NAME", out var n) ? n : p.MachineName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(p => p.InstanceId, StringComparer.Ordinal).ToList();
+
+            // step 4: Bağlantı sonuçları: canlı pod'un son test turundan gelenler "taze", diğerleri son bilinen sonuç (soluk).
+            var freshAfter = now - interval - interval;
+            status.Connections = connections.Select(c => new ConnectionStatus
+            {
+                ConnectionId = c.Id, Name = c.Name, Target = c.Host + (c.Port.HasValue ? ":" + c.Port : ""),
+                Cells = rt.Known.Keys
+                    .Where(pod => rt.Results.ContainsKey(c.Id + "|" + pod))
+                    .Select(pod =>
+                    {
+                        var cell = rt.Results[c.Id + "|" + pod];
+                        return cell with { Fresh = states[pod] == "up" && cell.CheckedAtUtc >= freshAfter };
+                    })
+                    .ToList()
+            }).ToList();
+        }
+
+        status.PodCount = up;
+        status.Converged = true; // pod'lar kendini bildirdiği için sayı kesindir
+
+        // step 5: Genel durum.
+        if (rt.Known.Count == 0)
+        {
+            status.State = urlProblem != null ? "down" : "unknown";
+            status.Message = NoReportMessage + (urlProblem != null ? "; " + urlProblem : "");
+        }
+        else if (up == 0)
+        {
+            status.State = "down";
+            status.Message = $"Hiçbir pod bildirim göndermiyor (son bildirim: {lastReport:HH:mm:ss} UTC)" + (urlProblem != null ? "; " + urlProblem : "");
+        }
+        else
+        {
+            var problems = new List<string>();
+            var missing = status.Pods.Count(p => p.State == "missing");
+            if (missing > 0) problems.Add($"{missing} pod eksik (üst üste {threshold}+ tur bildirim göndermedi)");
+            if (urlProblem != null) problems.Add(urlProblem);
+            AddConnectionProblems(status, problems);
+
+            var notes = new List<string>();
+            var late = status.Pods.Count(p => p.State == "unconfirmed");
+            if (late > 0) notes.Add($"{late} pod'un bildirimi gecikti");
+            if (connections.Count > 0 && status.Connections.All(c => c.Cells.Count == 0)) notes.Add("ilk test sonuçları bekleniyor");
+
+            status.State = problems.Count > 0 ? "degraded" : "healthy";
+            status.Message = problems.Count + notes.Count == 0 ? null : string.Join("; ", problems.Concat(notes));
+        }
+
+        AddHistory(rt, status);
+        status.History = rt.History.ToList();
+        return status;
     }
 
     private void PublishInterim(AppDefinition app, AppStatus status, AppRuntime rt, HashSet<string> seen)
@@ -366,7 +603,7 @@ public sealed class MonitorService : BackgroundService
         _latest.TryGetValue(app.Id, out var prev);
         _latest[app.Id] = new AppStatus
         {
-            AppId = app.Id, Name = app.Name, BaseUrl = app.BaseUrl, CheckedAtUtc = status.CheckedAtUtc,
+            AppId = app.Id, Name = app.Name, BaseUrl = app.BaseUrl, Mode = app.Mode, CheckedAtUtc = status.CheckedAtUtc,
             State = prev?.State ?? "unknown", Message = "Bağlantılar test ediliyor…",
             PodCount = status.PodCount, Converged = status.Converged, Confidence = status.Confidence,
             Pods = status.Pods, History = rt.History.ToList(),
@@ -416,20 +653,8 @@ public sealed class MonitorService : BackgroundService
                     continue;
                 }
 
-                // step 2: Sonucu, testi yapan pod'un hücresine yazıyoruz. Önceki sonuca bakarak "ne zamandan beri başarısız" ve
-                //         "son başarılı test" bilgisini taşıyoruz.
-                lock (rt)
-                {
-                    var key = conn.Id + "|" + cell.InstanceId;
-                    rt.Results.TryGetValue(key, out var prev);
-                    rt.Results[key] = cell with
-                    {
-                        LastSuccessUtc = cell.Success ? cell.CheckedAtUtc : prev?.LastSuccessUtc,
-                        FailingSinceUtc = cell.Success ? null
-                            : prev is { Success: false } ? prev.FailingSinceUtc ?? prev.CheckedAtUtc
-                            : cell.CheckedAtUtc
-                    };
-                }
+                // step 2: Sonucu, testi yapan pod'un hücresine yazıyoruz.
+                lock (rt) StoreCell(rt, conn.Id, cell);
                 got.Add(cell.InstanceId);
             }
 
@@ -482,10 +707,18 @@ public sealed class MonitorService : BackgroundService
             Math.Max(1, _opt.MaxInstanceAttempts), _opt.InstanceConfidence, ct).ConfigureAwait(false);
         if (inst == null) return (null, err != null && err.StartsWith("HTTP 404") ? OldVersionError : err);
         if (inst.ExecutedByInstanceId == null || inst.Tcp == null) return (null, OldVersionError);
+        return (CellFromReport(conn, inst, inst.ExecutedByInstanceId), null);
+    }
 
+    /// <summary>
+    /// Bir pod'un bir bağlantı için ürettiği discover raporunu hücreye çevirir. Discover modda uygulamanın discover ucundan,
+    /// Strict modda pod'un kendi bildiriminden gelen rapor aynı biçimdedir.
+    /// </summary>
+    private static PodConnectionCell CellFromReport(ConnectionDefinition conn, DiscoverReport inst, string instanceId)
+    {
         // step 2: Telnet sonucu. Hedef ConnectivityProbe kullanmıyorsa sonuç bu kadar.
-        var cell = FromTcp(inst.Tcp, inst.ExecutedByInstanceId);
-        if (!conn.UsesConnectivityProbe) return (cell, null);
+        var cell = FromTcp(inst.Tcp!, instanceId);
+        if (!conn.UsesConnectivityProbe) return cell;
 
         var firstError = inst.Errors.Keys.FirstOrDefault();
 
@@ -497,7 +730,7 @@ public sealed class MonitorService : BackgroundService
             : "Telnet başarılı ama hedefte ConnectivityProbe bulunamadı (bağlantı tanımındaki işareti kontrol edin)"
               + (firstError != null ? ": " + firstError : "");
 
-        return (cell with
+        return cell with
         {
             Success = cell.Success && inst.TargetKind == ProbeTargetKind.ConnectivityProbe,
             Error = reason,
@@ -508,7 +741,26 @@ public sealed class MonitorService : BackgroundService
                 .Select(s => new TargetPod(s.InstanceId, s.Identity.MachineName, s.Identity.LocalAddresses, s.Hits,
                     s.Identity.Environment.TryGetValue("POD_NAME", out var podName) ? podName : null))
                 .OrderBy(p => p.MachineName, StringComparer.OrdinalIgnoreCase).ToList()
-        }, null);
+        };
+    }
+
+    /// <summary>
+    /// Hücreyi saklar; önceki sonuca bakarak "ne zamandan beri başarısız" ve "son başarılı test" bilgisini taşır.
+    /// Çağıran rt üzerinde kilit tutmalıdır.
+    /// </summary>
+    private static PodConnectionCell StoreCell(AppRuntime rt, string connId, PodConnectionCell cell)
+    {
+        var key = connId + "|" + cell.InstanceId;
+        rt.Results.TryGetValue(key, out var prev);
+        var stored = cell with
+        {
+            LastSuccessUtc = cell.Success ? cell.CheckedAtUtc : prev?.LastSuccessUtc,
+            FailingSinceUtc = cell.Success ? null
+                : prev is { Success: false } ? prev.FailingSinceUtc ?? prev.CheckedAtUtc
+                : cell.CheckedAtUtc
+        };
+        rt.Results[key] = stored;
+        return stored;
     }
 
     /// <summary>

@@ -28,6 +28,10 @@ namespace ConnectivityProbe
         /// <summary>ASP.NET tarafından uygulama başlarken çağrılır (PreApplicationStartMethod).</summary>
         public static void RegisterAutomatically()
         {
+            // step 0: Strict mod (MonitorUrl + AppKey): arka plan işini başlatıyoruz. Uçların açık olmasından ve modül kaydından
+            //         bağımsızdır (Classic modda modül elle kaydedilse de agent burada başlar).
+            StartStrictAgent();
+
             // step 1: Kapalıysa veya otomatik kayıt istenmiyorsa hiçbir şey yapmıyoruz.
             var settings = ProbeSettings.FromEnvironmentAndAppSettings();
             if (settings.TryGetValue("AutoRegister", out var auto) && bool.TryParse(auto, out var enabled) && !enabled) return;
@@ -36,6 +40,39 @@ namespace ConnectivityProbe
             // step 2: Modülü bir kez kaydediyoruz.
             if (Interlocked.Exchange(ref _registered, 1) == 1) return;
             HttpApplication.RegisterModule(typeof(ConnectivityProbeModule));
+        }
+
+        private static void StartStrictAgent()
+        {
+            try
+            {
+                var options = Engine.Value.Options;
+                if (!options.StrictEnabled) return;
+                // IIS'te log altyapısı bilinmediği için System.Diagnostics.Trace'e yazıyoruz (web.config'te bir trace listener ile toplanabilir).
+                options.Log ??= (level, message) => System.Diagnostics.Trace.WriteLine(level + ": " + message, "ConnectivityProbe");
+
+                var agent = ConnectivityProbeAgent.Start(options);
+                // IIS uygulamayı kapatırken (geri dönüşüm, deploy, durdurma) Stop çağrılır ve Monitor'e "kapanıyorum" bildirilir.
+                if (agent != null) System.Web.Hosting.HostingEnvironment.RegisterObject(new AgentShutdown(agent));
+            }
+            catch (Exception ex)
+            {
+                // Agent'ın başlayamaması uygulamanın açılmasını engellememeli.
+                System.Diagnostics.Trace.WriteLine("ConnectivityProbe strict mode could not start: " + ex.Message, "ConnectivityProbe");
+            }
+        }
+
+        /// <summary>IIS kapanırken agent'ı durdurur.</summary>
+        private sealed class AgentShutdown : System.Web.Hosting.IRegisteredObject
+        {
+            private readonly ConnectivityProbeAgent _agent;
+            public AgentShutdown(ConnectivityProbeAgent agent) => _agent = agent;
+
+            public void Stop(bool immediate)
+            {
+                _agent.Stop();
+                System.Web.Hosting.HostingEnvironment.UnregisterObject(this);
+            }
         }
 
         public void Init(HttpApplication application)

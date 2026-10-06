@@ -1,5 +1,18 @@
 # Değişiklik geçmişi
 
+## 1.1.0
+
+**Strict mod.** Uygulamanın her pod'u Monitor'e kendini bildirir; pod sayısı ve her pod'un sonucu kesindir.
+
+- `ConnectivityProbe:MonitorUrl` ve `ConnectivityProbe:AppKey` verilince arka planda bir iş (agent) kendiliğinden başlar.
+  ASP.NET Core'da uygulamayla birlikte, IIS'te uygulama başlarken başlar; diğer uygulamalarda `ConnectivityProbeAgent.Start()`.
+- Agent her `Strict:CommandPollSeconds` (varsayılan 10 sn) Monitor'e bildirim gönderir ve uygulamanın bağlantı tanımlarını
+  alır. Test zamanı gelince (varsayılan Monitor'ün aralığı, 30 sn; `Strict:IntervalSeconds` ile değiştirilebilir) veya
+  Monitor'de "Şimdi test et"e basılınca her bağlantıyı pod'un içinden test edip sonuçları gönderir. Testler discover ucuyla
+  aynı mantıkta çalışır.
+- Uygulama düzgün kapanırken Monitor'e "kapanıyorum" bildirilir; deploy ve scale-down alarm üretmez.
+- Yeni uç yoktur; mevcut `discover` / `identity` uçları ve Discover modu aynen çalışır.
+
 ## 1.0.0
 
 İlk NuGet sürümü.

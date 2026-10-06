@@ -11,7 +11,17 @@ public sealed class MonitorOptions
     /// </summary>
     public string? AccessKey { get; set; }
 
-    /// <summary>Otomatik test döngüsünün aralığı (saniye). Varsayılan: 30.</summary>
+    /// <summary>Monitor arayüzüne giriş için kullanıcı adı. Varsayılan: admin.</summary>
+    public string AdminUser { get; set; } = "admin";
+
+    /// <summary>
+    /// Monitor arayüzüne giriş şifresi. Verilmezse arayüze yalnızca Monitor'ün çalıştığı makineden (localhost) erişilebilir;
+    /// herkesin erişebildiği bir yerde çalışıyorsa mutlaka verin. Ortam değişkeniyle verin: Monitor__AdminPassword.
+    /// Pod'ların kullandığı /api/agent uçları şifre değil, uygulama anahtarıyla korunur.
+    /// </summary>
+    public string? AdminPassword { get; set; }
+
+    /// <summary>Otomatik test döngüsünün aralığı (saniye). Strict modda pod'ların test aralığı da budur. Varsayılan: 30.</summary>
     public int IntervalSeconds { get; set; } = 30;
 
     /// <summary>Tek bir bağlantı/istek denemesinin zaman aşımı (ms). Varsayılan: 5000.</summary>

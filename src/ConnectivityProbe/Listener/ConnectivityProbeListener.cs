@@ -54,8 +54,14 @@ namespace ConnectivityProbe
         public static ConnectivityProbeListener? Start(ConnectivityProbeOptions? options = null)
         {
             options ??= ConnectivityProbeOptions.FromEnvironment();
-            return options.Enabled ? new ConnectivityProbeListener(options) : null;
+            // Strict mod ayarları verilmişse agent da başlar; dinleyici kapatılınca (Dispose) agent da durur.
+            var agent = ConnectivityProbeAgent.Start(options);
+            if (!options.Enabled) return null;
+            var listener = new ConnectivityProbeListener(options) { _agent = agent };
+            return listener;
         }
+
+        private ConnectivityProbeAgent? _agent;
 
         private async Task AcceptLoopAsync()
         {
@@ -131,6 +137,7 @@ namespace ConnectivityProbe
             try { _listener.Stop(); } catch (ObjectDisposedException) { }
             _listener.Close();
             try { _loop.Wait(TimeSpan.FromSeconds(5)); } catch (AggregateException) { }
+            _agent?.Stop();
         }
     }
 }

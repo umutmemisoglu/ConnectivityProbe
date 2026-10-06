@@ -95,7 +95,6 @@ namespace ConnectivityProbe
             // Aynı pipeline'a iki kez eklenmesin.
             if (app.Properties.ContainsKey(RegisteredKey)) return;
             app.Properties[RegisteredKey] = true;
-            if (!options.Enabled) return;
 
             // Log çıkışı verilmemişse uygulamanın kendi log altyapısına ("ConnectivityProbe" kategorisi) bağlıyoruz.
             if (options.Log == null && app.ApplicationServices.GetService(typeof(ILoggerFactory)) is ILoggerFactory loggerFactory)
@@ -112,8 +111,31 @@ namespace ConnectivityProbe
                 };
             }
 
+            // Strict mod (MonitorUrl + AppKey): uygulama başlayınca agent'ı başlatıp kapanırken durduruyoruz (Monitor'e
+            // "kapanıyorum" bildirimi gider). Uçların açık/kapalı olmasından (Enabled) bağımsızdır.
+            if (options.StrictEnabled) StartAgentWithApplication(app, options);
+
+            if (!options.Enabled) return;
             var engine = new ProbeEngine(options);
             app.Use(next => context => InvokeAsync(context, next, engine));
+        }
+
+        private static void StartAgentWithApplication(IApplicationBuilder app, ConnectivityProbeOptions options)
+        {
+#if NET8_0_OR_GREATER
+            var lifetime = app.ApplicationServices.GetService(typeof(Microsoft.Extensions.Hosting.IHostApplicationLifetime))
+                as Microsoft.Extensions.Hosting.IHostApplicationLifetime;
+#else
+            // ASP.NET Core 2.1 - 7 için ortak en düşük sürümdeki karşılığı (yeni sürümlerde de hâlâ kayıtlıdır).
+            var lifetime = app.ApplicationServices.GetService(typeof(IApplicationLifetime)) as IApplicationLifetime;
+#endif
+            if (lifetime == null)
+            {
+                ConnectivityProbeAgent.Start(options);
+                return;
+            }
+            lifetime.ApplicationStarted.Register(() => ConnectivityProbeAgent.Start(options));
+            lifetime.ApplicationStopping.Register(() => ConnectivityProbeAgent.Current?.Stop());
         }
 
         private static async Task InvokeAsync(HttpContext context, RequestDelegate next, ProbeEngine engine)

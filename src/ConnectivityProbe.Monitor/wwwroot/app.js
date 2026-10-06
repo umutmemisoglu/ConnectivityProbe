@@ -35,6 +35,8 @@ async function api(method, url, body) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  // Oturum süresi dolduysa giriş sayfasına yönlendiriyoruz.
+  if (res.status === 401 && !url.startsWith('/api/auth')) { location.href = '/login.html'; throw new Error('Giriş gerekli'); }
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).error || msg; } catch { /* gövde JSON değil */ }
@@ -72,6 +74,14 @@ const dateTimeOf = (iso) => {
   const d = new Date(iso);
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString('tr-TR') : d.toLocaleString('tr-TR');
 };
+// Kısa "ne kadar önce": "8 sn önce", "3 dk önce", "2 sa önce".
+function agoOf(iso) {
+  const sec = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
+  if (sec < 60) return `${sec} sn önce`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} dk önce`;
+  return `${Math.floor(sec / 3600)} sa önce`;
+}
+
 // Bir andan bu yana geçen süre: "45 saniyedir", "12 dakikadır", "2 saat 5 dakikadır", "3 gündür".
 function durationOf(iso) {
   const sec = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
@@ -260,10 +270,22 @@ function renderApps() {
       return `
         <div class="app-card" data-app="${a.id}">
           <div class="app-head">
-            <div class="grow"><div class="title">${esc(a.name)}</div><div class="url">${esc(a.baseUrl)}</div></div>
+            <div class="grow"><div class="title">${esc(a.name)} ${modeBadge(a.mode)}</div>
+              <div class="url">${esc(a.baseUrl || (a.mode === 'strict' ? 'adres yok · pod\'lar kendini bildirir' : ''))}</div></div>
             <button class="icon-btn" data-edit-app="${a.id}" title="Düzenle / taşı">✎</button>
             <button class="icon-btn" data-del-app="${a.id}" title="Sil">✕</button>
           </div>
+          ${a.mode === 'strict' ? `
+            <div class="strict-key">
+              <span class="sk-label">Uygulama anahtarı</span>
+              <code class="sk-key">${esc(a.appKey || '')}</code>
+              <button class="icon-btn" data-copy="${esc(a.appKey || '')}" title="Anahtarı kopyala">⧉</button>
+              <button class="icon-btn" data-regen-key="${a.id}" title="Yeni anahtar üret (eskisi hemen geçersiz olur)">↻</button>
+              <details class="sk-setup"><summary>Kurulum bilgisi</summary>
+                <pre>${esc(strictSetup(a))}</pre>
+                <button class="btn small" data-copy="${esc(strictSetup(a))}">Kopyala</button>
+              </details>
+            </div>` : ''}
           <div class="dropzone">
             ${attached.length ? attached.map((c) => `
               <span class="chip"><span class="name">${esc(c.name)}${cpBadge(c)}${c.teamId ? '' : ' <span class="common" title="Ortak havuzdan">ortak</span>'}</span>
@@ -333,7 +355,13 @@ const cpBadge = (c) => c.usesConnectivityProbe
 
 const appFields = () => [
   { name: 'name', label: 'Ad', placeholder: 'ör. Orders API' },
-  { name: 'baseUrl', label: 'Uygulama URL\'si', placeholder: 'https://orders.example.com', hint: 'Pod\'lara dağıtım yapan adres. Uygulamada ConnectivityProbe yüklü olmalı.' },
+  { name: 'mode', label: 'Mod', type: 'select', options: [
+      { value: 'discover', label: 'Discover: Monitor uygulamanın adresine gider' },
+      { value: 'strict', label: 'Strict: her pod kendini bildirir (kesin pod sayısı)' },
+    ],
+    hint: 'Strict: kayıttan sonra bir uygulama anahtarı üretilir; uygulamada ConnectivityProbe:MonitorUrl ve ConnectivityProbe:AppKey verilince her pod tanımları buradan çeker, kendi içinde test eder ve sonucu gönderir.' },
+  { name: 'baseUrl', label: 'Uygulama URL\'si', placeholder: 'https://orders.example.com',
+    hint: 'Discover: zorunlu, pod\'lara dağıtım yapan adres. Strict: isteğe bağlı; verilirse Monitor dışarıdan erişimi de kontrol eder.' },
   { name: 'teamId', label: 'Ekip', type: 'select', options: teamOptions('(atanmamış)'),
     hint: 'Başka ekibe taşınırsa eski ekibin havuzundan atanmış bağlantılar çıkarılır; ortak bağlantılar kalır.' },
 ];
@@ -343,7 +371,36 @@ const toConnBody = (v) => ({
   name: v.name, host: v.host, port: v.port === '' ? null : Number(v.port),
   usesConnectivityProbe: v.usesConnectivityProbe === true, teamId: v.teamId || null,
 });
-const toAppBody = (v) => ({ name: v.name, baseUrl: v.baseUrl, teamId: v.teamId || null });
+const toAppBody = (v) => ({ name: v.name, baseUrl: v.baseUrl, teamId: v.teamId || null, mode: v.mode || 'discover' });
+
+// Uygulamanın mod rozeti (STRICT / DISCOVER).
+const modeBadge = (mode) => (mode === 'strict'
+  ? '<span class="mode strict" title="Strict: her pod kendini bildirir; pod sayısı kesin">STRICT</span>'
+  : '<span class="mode discover" title="Discover: Monitor uygulamanın adresine gider; pod sayısı olasılıksal">DISCOVER</span>');
+
+// Strict uygulamayı kurmak için gereken ayarlar (Monitor'ün kendi adresiyle).
+const strictSetup = (a) => `dotnet add package ConnectivityProbe
+
+# Ortam değişkenleri (Kubernetes'te env / secret):
+ConnectivityProbe__MonitorUrl=${location.origin}
+ConnectivityProbe__AppKey=${a.appKey}
+
+# ASP.NET Core: Program.cs'te app.UseConnectivityProbe(); veya kodsuz:
+ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=ConnectivityProbe
+
+# İsteğe bağlı (varsayılanlar):
+# ConnectivityProbe__Strict__IntervalSeconds=30      test aralığı (verilmezse Monitor'ünki)
+# ConnectivityProbe__Strict__CommandPollSeconds=10   Monitor'e bildirim sıklığı`;
+
+// Panoya kopyalar (güvenli olmayan bağlamda yedek yöntem).
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  }
+}
 
 async function afterChange() { await loadDefs(); await refreshMonitor(); }
 
@@ -395,11 +452,22 @@ $('#tab-defs').addEventListener('click', async (e) => {
 
     // Uygulamalar
     } else if (d.addApp) {
-      openForm('Uygulama ekle', appFields(), { teamId: d.addApp }, async (v) => { await api('POST', '/api/apps', toAppBody(v)); await afterChange(); });
+      openForm('Uygulama ekle', appFields(), { teamId: d.addApp, mode: 'discover' }, async (v) => { await api('POST', '/api/apps', toAppBody(v)); await afterChange(); });
     } else if (d.editApp) {
       const a = defs.apps.find((x) => x.id === d.editApp);
-      openForm('Uygulamayı düzenle', appFields(), { ...a, teamId: a.teamId ?? '' },
-        async (v) => { await api('PUT', '/api/apps/' + a.id, toAppBody(v)); await afterChange(); });
+      openForm('Uygulamayı düzenle', appFields(), { ...a, teamId: a.teamId ?? '' }, async (v) => {
+        if ((v.mode || 'discover') !== a.mode && !confirm('Mod değişince bu uygulamanın pod geçmişi sıfırlanır. Devam edilsin mi?')) return;
+        await api('PUT', '/api/apps/' + a.id, toAppBody(v)); await afterChange();
+      });
+    } else if (d.regenKey) {
+      const a = defs.apps.find((x) => x.id === d.regenKey);
+      if (confirm(`"${a.name}" için yeni anahtar üretilecek. Eski anahtar hemen geçersiz olur; pod'lar yeni anahtarla yapılandırılana kadar bildirim gönderemez. Devam edilsin mi?`)) {
+        await api('POST', `/api/apps/${a.id}/regenerate-key`); await afterChange();
+      }
+    } else if (d.copy !== undefined) {
+      const ok = await copyText(d.copy);
+      t.textContent = ok ? '✓' : '!';
+      setTimeout(() => { t.textContent = t.dataset.copy.includes('\n') ? 'Kopyala' : '⧉'; }, 1200);
     } else if (d.delApp) {
       const a = defs.apps.find((x) => x.id === d.delApp);
       if (confirm(`"${a.name}" uygulaması silinsin mi? İzleme durur.`)) { await api('DELETE', '/api/apps/' + a.id); await afterChange(); }
@@ -457,12 +525,12 @@ function monogram(name) {
   return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] || '?').slice(0, 2)).toLocaleUpperCase('tr');
 }
 
-// Arama: uygulama adı, URL, ekip ve birim adı içinde (büyük/küçük harf duyarsız).
+// Arama: uygulama adı, URL, ekip, birim adı ve mod ("strict" / "discover") içinde (büyük/küçük harf duyarsız).
 function matches(s, q) {
   if (!q) return true;
   const team = teamOf(appTeamId(s.appId));
   const unit = team ? unitOf(team.unitId) : null;
-  return [s.name, s.baseUrl, team?.name, unit?.name].some((x) => lower(x).includes(q));
+  return [s.name, s.baseUrl, team?.name, unit?.name, s.mode].some((x) => lower(x).includes(q));
 }
 
 // Satır başlığındaki durum sayaçları: ● sağlıklı ● sorunlu ● erişilemiyor.
@@ -517,10 +585,11 @@ function tile(s) {
     <button class="tile ${s.state}" data-open-app="${esc(s.appId)}" style="--h:${hueOf(s.name)}" title="${esc(s.message || STATE_TEXT[s.state])}">
       <div class="tile-art"><span class="mono">${esc(monogram(s.name))}</span></div>
       ${flag ? `<span class="flag ${flag.cls}">${flag.text}</span>` : ''}
+      <span class="tile-mode">${modeBadge(s.mode)}</span>
       <div class="tile-body">
         <span class="tile-name">${esc(s.name)}</span>
         <div class="tile-line"><span class="st ${s.state}">${STATE_TEXT[s.state]}</span><span class="box">${podsText(s)}</span>${connsText(s)}</div>
-        <div class="tile-more">${esc(team ? team.name + ' · ' : '')}${esc(s.baseUrl)} · ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}
+        <div class="tile-more">${esc(team ? team.name + ' · ' : '')}${esc(s.baseUrl || 'adres yok')} · ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}
           ${hist ? `<div class="tile-hist">${hist}</div>` : ''}</div>
       </div>
       <div class="tile-bar"><i style="width:${health}%"></i></div>
@@ -694,7 +763,7 @@ function renderModal() {
       <div class="m-art ${s.state}" style="--h:${hueOf(s.name)}"><span class="mono">${esc(monogram(s.name))}</span></div>
       <button class="m-close" data-close-modal aria-label="Kapat">✕</button>
       <div class="m-hero-text">
-        <div class="m-kicker">${esc([unit?.name, team?.name].filter(Boolean).join(' · ') || 'Atanmamış')}</div>
+        <div class="m-kicker">${modeBadge(s.mode)} ${esc([unit?.name, team?.name].filter(Boolean).join(' · ') || 'Atanmamış')}</div>
         <h2>${esc(s.name)}</h2>
         <div class="m-actions">
           <button class="nf-btn white" data-run>${ICON_PLAY}Şimdi test et</button>
@@ -708,7 +777,8 @@ function renderModal() {
           <div class="m-meta">
             <span class="st ${s.state}">${STATE_TEXT[s.state]}</span>
             <span class="box">${podsText(s)}</span>
-            ${s.confidence != null ? `<span class="muted" title="Başka pod olmama olasılığı">%${Math.round(s.confidence * 100)} güven</span>` : ''}
+            ${s.mode === 'strict' ? '<span class="muted" title="Her pod kendini bildirdiği için pod sayısı kesindir">kesin sayı</span>'
+              : s.confidence != null ? `<span class="muted" title="Başka pod olmama olasılığı">%${Math.round(s.confidence * 100)} güven</span>` : ''}
             <span class="muted">son kontrol ${s.checkedAtUtc ? timeOf(s.checkedAtUtc) : '–'}</span>
           </div>
           ${s.message ? `<p class="m-msg ${msgClass}">${esc(s.message)}</p>` : ''}
@@ -718,7 +788,8 @@ function renderModal() {
             <div class="m-history-label">Son ${hist.length} tur · çubuk yüksekliği pod sayısı</div>` : ''}
         </div>
         <div class="m-side">
-          <div><span>URL: </span>${esc(s.baseUrl)}</div>
+          <div><span>Mod: </span>${s.mode === 'strict' ? 'Strict (pod\'lar kendini bildirir)' : 'Discover (Monitor uygulamaya gider)'}</div>
+          <div><span>URL: </span>${esc(s.baseUrl || '–')}</div>
           <div><span>Birim: </span>${esc(unit?.name ?? '–')}</div>
           <div><span>Ekip: </span>${esc(team?.name ?? 'Atanmamış')}</div>
           <div><span>Bağlantılar: </span>${total}${bad ? ` <span class="warn-t">(${bad} sorunlu)</span>` : ''}</div>
@@ -737,15 +808,19 @@ function renderModal() {
 //   missing     -> üst üste birkaç tur görünmedi ve yerine yeni pod gelmedi (kırmızı, alarm)
 function episodesHtml(s) {
   if (!s.pods?.length) return '';
-  const label = { up: 'ÇALIŞIYOR', unconfirmed: 'BU TURDA GÖRÜLMEDİ', missing: 'EKSİK' };
+  const strict = s.mode === 'strict';
+  // Strict'te "görülmedi" rastlantı değil, bildirimin gecikmesidir.
+  const label = { up: 'ÇALIŞIYOR', unconfirmed: strict ? 'BİLDİRİM GECİKTİ' : 'BU TURDA GÖRÜLMEDİ', missing: 'EKSİK' };
   return `<h3 class="m-sec">Pod'lar <span>${s.pods.length}</span></h3>
     <div class="episodes">${s.pods.map((p, i) => {
       const desc = p.state === 'up'
-        ? esc((p.addresses || []).join(', '))
+        ? esc((p.addresses || []).join(', ')) + (strict ? ` · son bildirim ${agoOf(p.lastSeenUtc)}` : '')
         : p.state === 'missing'
-          ? `${p.missedCycles} turdur cevap vermiyor · son görülme ${timeOf(p.lastSeenUtc)}`
-          : `Bu turda denk gelinmedi (alarm değil) · son görülme ${timeOf(p.lastSeenUtc)}`;
-      const kvs = Object.entries(p.details || {}).slice(0, 6)
+          ? (strict ? `${durationOf(p.lastSeenUtc)} bildirim göndermiyor` : `${p.missedCycles} turdur cevap vermiyor`) + ` · son görülme ${timeOf(p.lastSeenUtc)}`
+          : strict
+            ? `Bildirimi gecikti · son bildirim ${timeOf(p.lastSeenUtc)}`
+            : `Bu turda denk gelinmedi (alarm değil) · son görülme ${timeOf(p.lastSeenUtc)}`;
+      const kvs = [...(p.probeVersion ? [['ConnectivityProbe', p.probeVersion]] : []), ...Object.entries(p.details || {}).slice(0, 6)]
         .map(([k, v]) => `<span class="kv"><b>${esc(k)}</b> ${esc(v)}</span>`).join('');
       return `
         <div class="ep ${p.state}">
@@ -770,7 +845,7 @@ function matrixHtml(s) {
 
   const pods = s.pods || [];
   // Eksik pod'un sütun başlığı kırmızı: o pod cevap vermediği için bağlantılarını test edemiyoruz.
-  const head = pods.map((p) => `<th class="${p.state === 'missing' ? 'missing' : ''}">${esc(p.machineName)}<span class="pid">${shortId(p.instanceId)}${p.state === 'missing' ? ' · eksik' : ''}</span></th>`).join('');
+  const head = pods.map((p) => `<th class="${p.state === 'missing' ? 'missing' : ''}">${esc(p.details?.POD_NAME || p.machineName)}<span class="pid">${shortId(p.instanceId)}${p.state === 'missing' ? ' · eksik' : ''}</span></th>`).join('');
 
   const rows = s.connections.map((c) => {
     const ips = [...new Set(c.cells.flatMap((x) => x.ipResults.map((r) => r.address)))];
@@ -932,7 +1007,13 @@ window.addEventListener('scroll', () => $('#topbar').classList.toggle('scrolled'
 $('#search').addEventListener('input', renderMonitor);
 $('#onlyProblems').addEventListener('change', renderMonitor);
 
+$('#logout').addEventListener('click', async () => {
+  try { await api('POST', '/api/auth/logout'); } finally { location.href = '/login.html'; }
+});
+
 (async function init() {
+  // Giriş zorunluysa (Monitor:AdminPassword tanımlı) çıkış düğmesini gösteriyoruz.
+  try { const me = await api('GET', '/api/auth/me'); $('#logout').hidden = !me.loginRequired; } catch { /* yönlendirildi */ }
   setTab(load('tab', 'monitor'));
   await loadDefs();
   await refreshMonitor();

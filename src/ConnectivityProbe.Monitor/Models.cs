@@ -39,6 +39,18 @@ public sealed class ConnectionDefinition
     public bool UsesConnectivityProbe { get; set; }
 }
 
+/// <summary>Uygulamanın izlenme yöntemi.</summary>
+public static class AppModes
+{
+    /// <summary>Monitor uygulamanın adresine gider; istekler load balancer üzerinden pod'lara düşer (pod sayısı olasılıksal).</summary>
+    public const string Discover = "discover";
+    /// <summary>Her pod uygulama anahtarıyla Monitor'den kendi tanımlarını çeker, kendi içinde test edip sonucu gönderir (kesin).</summary>
+    public const string Strict = "strict";
+
+    public static string Normalize(string? mode) =>
+        string.Equals(mode?.Trim(), Strict, StringComparison.OrdinalIgnoreCase) ? Strict : Discover;
+}
+
 /// <summary>ConnectivityProbe'u yüklemiş, izlenecek bir uygulama.</summary>
 public sealed class AppDefinition
 {
@@ -46,7 +58,17 @@ public sealed class AppDefinition
     /// <summary>Uygulamanın ekibi; null = atanmamış (eski kayıtlar).</summary>
     public string? TeamId { get; set; }
     public string Name { get; set; } = "";
-    /// <summary>Uygulamanın adresi (ör. https://orders.example.com). Pod'lara dağıtım yapan adres olmalı.</summary>
+    /// <summary>discover | strict (bkz. <see cref="AppModes"/>). Eski kayıtlarda discover.</summary>
+    public string Mode { get; set; } = AppModes.Discover;
+    /// <summary>
+    /// Strict mod: uygulamanın pod'larının Monitor'den kendi tanımlarını çekmek ve sonuç göndermek için kullandığı anahtar
+    /// (ConnectivityProbe:AppKey). Discover modda null.
+    /// </summary>
+    public string? AppKey { get; set; }
+    /// <summary>
+    /// Uygulamanın adresi (ör. https://orders.example.com). Discover modda zorunlu: pod'lara dağıtım yapan adres olmalı.
+    /// Strict modda isteğe bağlı: verilirse Monitor ayrıca dışarıdan erişimi kontrol eder.
+    /// </summary>
     public string BaseUrl { get; set; } = "";
     /// <summary>Uygulamada UseConnectivityProbe'un kullandığı yol. Varsayılan: /connectivity-probe</summary>
     public string ProbePath { get; set; } = "/connectivity-probe";
@@ -67,9 +89,11 @@ public sealed class DefinitionData
 // ---------------------------------------------------------------------------------------------
 
 /// <summary>Uygulama tanımının arayüze giden hali.</summary>
-public sealed record AppView(string Id, string? TeamId, string Name, string BaseUrl, string ProbePath, List<string> ConnectionIds)
+/// <remarks>Strict anahtarı her zaman görüntülenebilir (yalnızca giriş yapmış yöneticiler görür).</remarks>
+public sealed record AppView(string Id, string? TeamId, string Name, string Mode, string? AppKey, string BaseUrl, string ProbePath, List<string> ConnectionIds)
 {
-    public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.BaseUrl, a.ProbePath, a.ConnectionIds.ToList());
+    public static AppView From(AppDefinition a) =>
+        new(a.Id, a.TeamId, a.Name, a.Mode, a.AppKey, a.BaseUrl, a.ProbePath, a.ConnectionIds.ToList());
 }
 
 /// <summary>Bağlantı tanımının arayüze giden hali. TeamId null = ortak havuz.</summary>
@@ -90,7 +114,25 @@ public sealed record UnitInput(string? Name);
 public sealed record TeamInput(string? Name, string? UnitId);
 
 /// <param name="TeamId">Uygulamanın ekibi (null = atanmamış).</param>
-public sealed record AppInput(string? Name, string? BaseUrl, string? TeamId = null, string? ProbePath = null);
+/// <param name="Mode">discover | strict (boş = discover).</param>
+public sealed record AppInput(string? Name, string? BaseUrl, string? TeamId = null, string? ProbePath = null, string? Mode = null);
+
+/// <summary>Monitor arayüzü girişi.</summary>
+public sealed record LoginInput(string? Username, string? Password);
+
+// ---------------------------------------------------------------------------------------------
+// Strict mod: pod'lara (ConnectivityProbeAgent) dönen yanıt
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>Pod'un bildirimine yanıt: bu uygulamaya ait bağlantı tanımları ve test ayarları.</summary>
+/// <param name="RunRequestId">"Şimdi test et"e her basıldığında değişir; pod değiştiğini görünce beklemeden test eder.</param>
+public sealed record AgentAssignment(
+    string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, int Attempts, double Confidence,
+    List<AgentConnection> Connections);
+
+public sealed record AgentConnection(string Id, string Name, string Host, int? Port, bool UsesConnectivityProbe);
+
+public sealed record AgentGoodbye(string? InstanceId);
 
 /// <param name="TeamId">Sahip ekip; null = ortak havuz.</param>
 /// <param name="UsesConnectivityProbe">Hedef de ConnectivityProbe kullanıyor mu (pod keşfi yapılsın mı).</param>
@@ -116,6 +158,8 @@ public sealed class AppStatus
     public string AppId { get; set; } = "";
     public string Name { get; set; } = "";
     public string BaseUrl { get; set; } = "";
+    /// <summary>discover | strict</summary>
+    public string Mode { get; set; } = AppModes.Discover;
     /// <summary>healthy | degraded | down | unknown</summary>
     public string State { get; set; } = "unknown";
     public string? Message { get; set; }
@@ -148,6 +192,8 @@ public sealed class PodStatus
     /// <summary>Üst üste kaç turdur görünmüyor.</summary>
     public int MissedCycles { get; set; }
     public DateTime LastSeenUtc { get; set; }
+    /// <summary>Pod'daki ConnectivityProbe sürümü (biliniyorsa).</summary>
+    public string? ProbeVersion { get; set; }
 }
 
 public sealed class ConnectionStatus

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connectivity Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+  <div class="login-bg" aria-hidden="true"></div>
+  <header class="topbar">
+    <div class="logo">CONNECTIVITY<span>monitor</span></div>
+  </header>
+
+  <main class="login-wrap">
+    <form id="loginForm" class="login-card" autocomplete="on">
+      <h1>Oturum Aç</h1>
+      <label class="login-field">
+        <span>Kullanıcı adı</span>
+        <input id="username" name="username" autocomplete="username" required>
+      </label>
+      <label class="login-field">
+        <span>Şifre</span>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="loginError" class="error" role="alert"></p>
+      <button type="submit" class="nf-btn red">Oturum Aç</button>
+      <p class="login-hint">Kullanıcı adı ve şifre Monitor ayarlarında tanımlıdır (Monitor:AdminUser, Monitor:AdminPassword).</p>
+    </form>
+  </main>
+
+  <script src="login.js"></script>
+</body>
+</html>
