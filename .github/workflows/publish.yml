@@ -47,5 +47,17 @@ jobs:
         with:
           user: umut92
 
+      # Windows'ta dotnet nuget push "*" jokerini kendisi açmıyor; dosyaları bash ile tek tek veriyoruz.
+      # Aynı klasördeki .snupkg (semboller) her .nupkg ile birlikte otomatik yüklenir.
       - name: Push
-        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          shopt -s nullglob
+          packages=(artifacts/*.nupkg)
+          if [ ${#packages[@]} -eq 0 ]; then echo "artifacts klasöründe paket yok"; exit 1; fi
+          for p in "${packages[@]}"; do
+            echo "Pushing $p"
+            dotnet nuget push "$p" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
