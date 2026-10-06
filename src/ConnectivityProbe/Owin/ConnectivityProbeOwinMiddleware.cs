@@ -28,6 +28,9 @@ namespace ConnectivityProbe
         {
             _next = next ?? throw new ArgumentNullException(nameof(next));
             _engine = new ProbeEngine(options ?? throw new ArgumentNullException(nameof(options)));
+            // Strict mod ayarları verilmişse agent'ı başlatıyoruz. OWIN'de standart bir "uygulama kapanıyor" olayı olmadığı için
+            // kapanışta ConnectivityProbeAgent.Current?.Stop() çağrılması önerilir (çağrılmazsa pod birkaç tur sonra "eksik" görünür).
+            ConnectivityProbeAgent.Start(options);
         }
 
         public async Task Invoke(IDictionary<string, object> environment)

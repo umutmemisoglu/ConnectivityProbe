@@ -3,7 +3,7 @@
 | Proje | Ne işe yarar |
 |---|---|
 | `src/ConnectivityProbe` | Kütüphane (`netstandard2.0` + `net462` + `net8.0`). IIS / klasik ASP.NET, ASP.NET Core 2.1–10, OWIN ve web sunucusu olmayan uygulamalarda **kod yazmadan** devreye girer; uygulamanın içinden TCP erişim testi yapar ve pod kimliğini sunar. Platform başına kurulum: [src/ConnectivityProbe/README.md](src/ConnectivityProbe/README.md) |
-| `src/ConnectivityProbe.Monitor` | Merkezi izleme uygulaması. Kütüphaneyi yüklemiş uygulamaları kaydeder, ortak bir bağlantı havuzunu sürükle-bırakla uygulamalara atar ve periyodik olarak pod sayısını ve erişimleri izler. |
+| `src/ConnectivityProbe.Monitor` | Merkezi izleme uygulaması. Kütüphaneyi yüklemiş uygulamaları kaydeder, ortak bir bağlantı havuzunu sürükle-bırakla uygulamalara atar ve periyodik olarak pod sayısını ve erişimleri izler. Uygulamalar **Discover** (Monitor uygulamaya gider) veya **Strict** (her pod Monitor'e kendini bildirir, kesin sonuç) modunda izlenir. |
 | `samples/ConnectivityProbe.SampleApi` | Örnek ASP.NET Core uygulaması. İçinde ConnectivityProbe'a dair **hiç kod yok**; yalnızca ortam değişkeni (`launchSettings.json`) ve `appsettings.json` ile devreye girer. |
 | `tests/ConnectivityProbe.Tests` | Kütüphanenin birim ve uçtan uca testleri (gerçek Kestrel sunucusuyla). `dotnet test tests/ConnectivityProbe.Tests` |
 
@@ -20,7 +20,23 @@ ve yeni sürüm çıkarma adımları için bkz. [PUBLISHING.md](PUBLISHING.md).
      - **Kartta görünenler:** durum, pod sayısı, bağlantı özeti, sol üstte en önemli sorunu gösteren şerit ("1 POD EKSİK", "ERİŞİLEMİYOR") ve alt kenarda cevap veren pod oranını gösteren bir çubuk. Üzerine gelince URL, son kontrol zamanı ve son turların geçmişi de görünür.
      - **Karta tıklayınca** bir detay penceresi açılır: pod'lar bölüm listesi biçiminde, bağlantı × pod matrisi, geçmiş grafiği ve "Pod listesini sıfırla" düğmesi.
      - Arama (ad, URL, ekip, birim) veya "Sadece sorunlular" seçildiğinde sonuçlar ızgara halinde gösterilir.
-1. **Uygulama kaydı:** Ad + URL (örn. `https://orders.example.com`). Uygulamada ConnectivityProbe devrede olmalı (bkz. kütüphane README'si).
+1. **Uygulama kaydı ve mod:** Her uygulama iki moddan biriyle tanımlanır; kartlarda ve detay penceresinde **STRICT / DISCOVER** rozetiyle görünür, aramaya "strict" yazarak süzülebilir.
+
+   | | Discover | Strict |
+   |---|---|---|
+   | Nasıl çalışır | Monitor uygulamanın adresine gider; istekler load balancer üzerinden pod'lara düşer. | Her pod, uygulama anahtarıyla Monitor'den kendi tanımlarını çeker, kendi içinde test eder ve sonucu gönderir. |
+   | Pod sayısı | Olasılıksal (güven yüzdesiyle) | **Kesin** (rapor veren pod'lar) |
+   | Uygulamada | ConnectivityProbe + ortak `AccessKey` | ConnectivityProbe 1.1+ + `ConnectivityProbe:MonitorUrl` + `ConnectivityProbe:AppKey` |
+   | Uygulama adresi | Zorunlu | İsteğe bağlı; verilirse Monitor dışarıdan erişimi de kontrol eder (HTTP'si olmayan worker'lar da izlenebilir) |
+   | Ağ yönü | Monitor → uygulama | Pod → Monitor |
+
+   **Strict:** Uygulama kaydedilince bir anahtar üretilir. Anahtar Tanımlar ekranındaki uygulama kartında her zaman görünür;
+   kopyala düğmesi, "Kurulum bilgisi" (hazır ortam değişkenleri) ve "yeni anahtar üret" düğmesi oradadır. Yeni anahtar
+   üretilince eskisi hemen geçersiz olur. Pod'lar 10 sn'de bir bildirim gönderir; "Şimdi test et" en geç bu sürede pod'lara
+   ulaşır. Düzgün kapanan pod "kapanıyorum" bildirir ve alarm vermeden listeden çıkar. Bildirimi kesilen pod önce "bildirim
+   gecikti", `MissingAfterCycles` tur sonra "eksik" olur. Mod değiştirilince uygulamanın pod geçmişi sıfırlanır.
+
+   **Discover:** Ad + URL (örn. `https://orders.example.com`). Uygulamada ConnectivityProbe devrede olmalı (bkz. kütüphane README'si).
    **Erişim anahtarı ortaktır:** tüm uygulamalarda aynı `ConnectivityProbe:AccessKey` kullanılır ve Monitor'e bir kez verilir (`Monitor:AccessKey`, tercihen ortam değişkeni `Monitor__AccessKey`). Monitor bu anahtarı hem izlenen uygulamalara hem de CP işaretli hedeflere gönderir.
 2. **Bağlantı havuzu:** Ortak erişim hedefleri (`sql01` + port, `sql01:1433`, IP veya `https://...`). Havuzdan bir bağlantıyı bir uygulamanın üzerine sürükleyip bırakarak o uygulamayla ilişkilendirirsiniz. Aynı bağlantı birden çok uygulamaya atanabilir.
    **Checkpoint — "Bu hedef de ConnectivityProbe kullanıyor mu?"** Her bağlantıda işaretlenir:
@@ -70,6 +86,8 @@ Varsayılan adres: http://localhost:5087/ . Ayarlar `src/ConnectivityProbe.Monit
 | Ayar | Varsayılan | Anlamı |
 |---|---|---|
 | `AccessKey` | boş | Ortak erişim anahtarı (uygulamalardaki `ConnectivityProbe:AccessKey` ile aynı). Ortam değişkeniyle verin: `Monitor__AccessKey` |
+| `AdminUser` / `AdminPassword` | `admin` / boş | Arayüz girişi. Şifre verilmezse arayüze **yalnızca Monitor'ün çalıştığı makineden** erişilebilir. Herkese açık kurulumda mutlaka verin: `Monitor__AdminPassword` |
+| `MaxConcurrentConnections` | 4 | Discover: bir uygulamanın bağlantılarından aynı anda kaç tanesi test edilir |
 | `IntervalSeconds` | 30 | Test turları arasındaki süre |
 | `ProbeTimeoutMs` | 5000 | Tek bir istek/bağlantı denemesinin zaman aşımı |
 | `DataFile` | `data/definitions.json` | Uygulama ve bağlantı tanımlarının saklandığı dosya |
@@ -81,8 +99,14 @@ Varsayılan adres: http://localhost:5087/ . Ayarlar `src/ConnectivityProbe.Monit
 
 ## Dikkat
 
-- **Monitor'ün kendi arayüzünde kimlik doğrulama yok.** Monitor herkese açık bir ağda çalıştırılmamalı; kayıtlı adreslere istek atar. Bir ters proxy / SSO arkasına alın. Ortak erişim anahtarını `appsettings.json`'a yazmak yerine ortam değişkeni / secret ile verin (`Monitor__AccessKey`). Anahtar tüm uygulamalarda aynı olduğu için sızarsa hepsi etkilenir; gerekirse ileride uygulama başına anahtar eklenebilir.
+- **Arayüz girişi:** `Monitor:AdminPassword` verildiğinde arayüz ve tüm yönetim API'leri giriş ister (çerez, 8 saat). Şifre
+  verilmezse yalnızca localhost'tan erişilir. Monitor bir ters proxy arkasındaysa ve proxy aynı makinedeyse istekler localhost'tan
+  gelmiş görünür; bu durumda şifreyi mutlaka verin. Pod'ların kullandığı `/api/agent/*` uçları girişten bağımsızdır, uygulama
+  anahtarıyla korunur. Monitor'ü HTTPS arkasında yayınlayın.
+- Ortak erişim anahtarını `appsettings.json`'a yazmak yerine ortam değişkeni / secret ile verin (`Monitor__AccessKey`). Anahtar
+  tüm Discover uygulamalarında aynı olduğu için sızarsa hepsi etkilenir. Strict anahtarı ise yalnızca kendi uygulamasını etkiler
+  (o uygulamanın tanımlarını okuma ve sonuç gönderme) ve tek tıkla yenilenebilir.
 - İzlenen uygulamalardaki `/connectivity-probe` uçlarını `AccessKey` ile koruyun ve `AllowedTargets` ile hangi hedeflere bağlanabileceklerini kısıtlayın. Monitor'de tanımlı bir bağlantı bu listede yoksa uygulama `403` döner ve satırda hata görünür.
 - Uygulamada kütüphanenin eski bir sürümü varsa (testi yapan pod bilgisi dönmüyorsa) satırda "sürüm eski" uyarısı görünür.
-- Pod sayımı ve "her pod bağlantıyı test etti" bilgisi olasılıksaldır (load balancer rastgele dağıtır). Bu turda bir pod'a denk gelinmezse hücrede son bilinen sonuç soluk olarak gösterilir.
+- Discover modunda pod sayımı ve "her pod bağlantıyı test etti" bilgisi olasılıksaldır (load balancer rastgele dağıtır). Bu turda bir pod'a denk gelinmezse hücrede son bilinen sonuç soluk olarak gösterilir. Kesin sonuç için Strict modu kullanın.
 - Self-signed HTTPS sertifikalı uygulamalar şimdilik desteklenmiyor (sertifika doğrulaması kapatılamıyor).

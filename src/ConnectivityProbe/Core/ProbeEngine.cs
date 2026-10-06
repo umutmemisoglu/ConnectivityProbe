@@ -163,59 +163,17 @@ namespace ConnectivityProbe
             if (scheme != "http" && scheme != "https")
                 return Error(400, "scheme must be http or https");
 
-            // Toplam süre sınırı: dolunca kalan denemeler yapılmaz ve yanıt "truncated: true" olur.
-            TimeSpan? maxDuration = _options.MaxRequestDuration > TimeSpan.Zero ? _options.MaxRequestDuration : (TimeSpan?)null;
-
-            // step 7: HER DURUMDA önce telnet (TCP). İsim çözülür; her IP ve ismin kendisi denenir. Port kapalıysa / firewall
-            //         engelliyorsa hedefe HTTP isteği hiç göndermiyoruz; nedeni (timeout, reddedildi, DNS) telnet raporunda yazar.
-            var tcp = await TcpProbe.ProbeAllAsync(
-                host, port, 1, timeout, TimeSpan.Zero, _options.MaxAddresses, maxDuration, request.Aborted).ConfigureAwait(false);
-            tcp.ExecutedByInstanceId = InstanceIdentityBuilder.GetInstanceId(_options);
-            tcp.ExecutedByMachineName = Environment.MachineName;
-            bool tcpOk = tcp.HostnameAttempts.Any(r => r.Success);
-
-            DiscoverReport report;
-            if (!tcpOk || !usesConnectivityProbe)
-            {
-                // step 8a: Telnet başarısız ("unreachable") veya hedef ConnectivityProbe kullanmıyor ("tcp"): burada bitiyor.
-                report = new DiscoverReport { TargetKind = tcpOk ? ProbeTargetKind.Tcp : ProbeTargetKind.Unreachable };
-            }
-            else
-            {
-                // step 8b: Telnet açık ve hedef de ConnectivityProbe kullanıyor: identity ucuna, her seferinde yeni bağlantıyla,
-                //          pod sayısından çok daha fazla istek atıp tekrar eden kimlikleri ayıklayarak hedefin pod'larını buluyoruz.
-                //          Hedefin yolu bizimkiyle aynı varsayılır. Anahtar: istek hedefin anahtarını taşıyorsa o, yoksa bizimki.
-                var targetKey = request.Header(ConnectivityProbeOptions.TargetAccessKeyHeader);
-                report = await InstanceCollector.CollectAsync(
-                    scheme, host, port, _identityPath, attempts, timeout, TimeSpan.Zero, adaptive: true, confidence: confidence,
-                    maxDuration: maxDuration, accessKey: string.IsNullOrEmpty(targetKey) ? _options.AccessKey : targetKey,
-                    cancellationToken: request.Aborted).ConfigureAwait(false);
-
-                report.TargetKind = report.Succeeded > 0 ? ProbeTargetKind.ConnectivityProbe
-                    : report.ConnectivityProbeDetected ? ProbeTargetKind.ConnectivityProbeError
-                    : ProbeTargetKind.Other;
-
-                // Bütün cevaplar tek bir pod'dan geldiyse: uygulama gerçekten tek pod olabilir, ama session affinity (sticky
-                // session) veya bağlantıları tek pod'a sabitleyen bir proxy de aynı sonucu verir. Sessizce "1 pod" demek yerine not düşüyoruz.
-                if (report.DistinctInstances == 1 && report.Succeeded >= SingleInstanceNoteThreshold)
-                    report.Notes.Add("All " + report.Succeeded + " responses came from a single instance. If the target runs more than one "
-                                     + "instance, the load balancer may not be spreading new connections (e.g. session affinity is enabled).");
-            }
-
-            // step 9: "Ben şu makinedeki şu pod olarak test ettim" bilgisini ve telnet sonucunu ekliyoruz.
-            report.ExecutedByInstanceId = tcp.ExecutedByInstanceId;
-            report.ExecutedByMachineName = tcp.ExecutedByMachineName;
-            report.ProbeVersion = ProbeInfo.Version;
-            report.Tcp = tcp;
+            // step 7-9: Telnet + (istenmişse) hedefin pod keşfi. Strict modun arka plan işi de aynı kodu kullanır.
+            //          Anahtar: istek hedefin anahtarını taşıyorsa o, yoksa bizimki (ortak anahtar).
+            var targetKey = request.Header(ConnectivityProbeOptions.TargetAccessKeyHeader);
+            var report = await DiscoverRunner.RunAsync(_options, host, port, scheme, usesConnectivityProbe, timeout, attempts, confidence,
+                string.IsNullOrEmpty(targetKey) ? _options.AccessKey : targetKey, request.Aborted).ConfigureAwait(false);
 
             _options.Log?.Invoke(ProbeLogLevel.Information, "ConnectivityProbe discover " + host + ":" + port + " -> " + report.TargetKind
                 + (report.DistinctInstances > 0 ? ", " + report.DistinctInstances + " instance(s)" : "")
                 + " in " + clock.ElapsedMilliseconds + " ms (caller " + (request.RemoteIp ?? "?") + ")");
             return Ok(report);
         }
-
-        /// <summary>Tek pod uyarısı için en az kaç başarılı yanıt gerektiği (az sayıda istekle karar vermemek için).</summary>
-        private const int SingleInstanceNoteThreshold = 10;
 
         /// <summary>
         /// Hedef izin listesine uyuyor mu? Liste boşsa her hedef serbesttir. Biçimler (büyük/küçük harf duyarsız):
