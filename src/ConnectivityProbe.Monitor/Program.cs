@@ -47,9 +47,10 @@ if (!loginRequired)
 app.UseAuthentication();
 app.Use(async (ctx, next) =>
 {
+    Lang.Set(ctx); // hata mesajlarının dili (arayüzde seçilen)
     var path = ctx.Request.Path;
     if (path.StartsWithSegments("/api/agent") || path.StartsWithSegments("/api/auth")
-        || path == "/login.html" || path == "/login.js" || path == "/style.css")
+        || path == "/login.html" || path == "/login.js" || path == "/i18n.js" || path == "/style.css")
     {
         await next(ctx);
         return;
@@ -67,12 +68,14 @@ app.Use(async (ctx, next) =>
     if (!loginRequired)
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsJsonAsync(new { error = "Monitor:AdminPassword tanımlı değil; arayüze yalnızca Monitor'ün çalıştığı makineden erişilebilir." });
+        await ctx.Response.WriteAsJsonAsync(new { error = Lang.T(
+            "Monitor:AdminPassword tanımlı değil; arayüze yalnızca Monitor'ün çalıştığı makineden erişilebilir.",
+            "Monitor:AdminPassword is not set; the UI is only reachable from the machine the Monitor runs on.") });
     }
     else if (path.StartsWithSegments("/api"))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await ctx.Response.WriteAsJsonAsync(new { error = "Giriş gerekli" });
+        await ctx.Response.WriteAsJsonAsync(new { error = Lang.T("Giriş gerekli", "Login required") });
     }
     else
     {
@@ -111,7 +114,7 @@ api.MapPost("/auth/login", async (LoginInput input, HttpContext ctx) =>
     if (!ok)
     {
         await Task.Delay(1000);
-        return Results.Json(new { error = "Kullanıcı adı veya şifre hatalı" }, statusCode: StatusCodes.Status401Unauthorized);
+        return Results.Json(new { error = Lang.T("Kullanıcı adı veya şifre hatalı", "Invalid user name or password") }, statusCode: StatusCodes.Status401Unauthorized);
     }
     var identity = new ClaimsIdentity(new[] { new Claim(ClaimTypes.Name, monitorOptions.AdminUser) }, CookieAuthenticationDefaults.AuthenticationScheme);
     await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
@@ -172,16 +175,17 @@ api.MapGet("/definitions", (DefinitionStore store) =>
         d.Apps.Select(AppView.From).ToList(), d.Connections.Select(ConnectionView.From).ToList(), d.Clusters);
 });
 
-// Cluster'a anlamlı bir ad verir (ör. "Prod İstanbul"); ilk görüldüğünde "Cluster N" adını alır.
-api.MapPut("/clusters/{key}", (string key, ClusterInput input, DefinitionStore store) =>
+// Cluster'a elle ad verir (ör. "Prod İstanbul"). Boş ad otomatik ada (pod ağı, ör. 10.42.0.0/16) döndürür.
+api.MapPut("/clusters/{key}", (string key, ClusterInput input, DefinitionStore store, MonitorService monitor) =>
 {
-    if (ValidateName(input.Name) is { } error) return Results.BadRequest(new { error });
+    if (!string.IsNullOrWhiteSpace(input.Name) && ValidateName(input.Name) is { } error) return Results.BadRequest(new { error });
     var cluster = store.Mutate(d =>
     {
         var c = d.Clusters.FirstOrDefault(x => x.Key == key);
-        if (c != null) c.Name = input.Name!.Trim();
+        if (c != null) c.Name = input.Name?.Trim() ?? "";
         return c;
     });
+    monitor.Trigger();
     return cluster == null ? Results.NotFound() : Results.Ok(cluster);
 });
 
@@ -214,7 +218,8 @@ api.MapDelete("/units/{id}", (string id, DefinitionStore store) =>
 {
     var result = store.Mutate(d =>
     {
-        if (d.Teams.Any(t => t.UnitId == id)) return "Birimde ekip var; önce ekipleri silin veya başka birime taşıyın";
+        if (d.Teams.Any(t => t.UnitId == id)) return Lang.T("Birimde ekip var; önce ekipleri silin veya başka birime taşıyın",
+            "The unit has teams; delete them or move them to another unit first");
         return d.Units.RemoveAll(u => u.Id == id) > 0 ? null : "notfound";
     });
     return result == null ? Results.NoContent() : result == "notfound" ? Results.NotFound() : Results.BadRequest(new { error = result });
@@ -230,7 +235,7 @@ api.MapPost("/teams", (TeamInput input, DefinitionStore store) =>
         d.Teams.Add(t);
         return t;
     });
-    return team == null ? Results.BadRequest(new { error = "Birim bulunamadı" }) : Results.Ok(team);
+    return team == null ? Results.BadRequest(new { error = Lang.T("Birim bulunamadı", "Unit not found") }) : Results.Ok(team);
 });
 
 // Ekibin adını veya birimini değiştirir.
@@ -241,7 +246,7 @@ api.MapPut("/teams/{id}", (string id, TeamInput input, DefinitionStore store) =>
     {
         var t = d.Teams.FirstOrDefault(x => x.Id == id);
         if (t == null) return (Team: (TeamDefinition?)null, Error: (string?)"notfound");
-        if (d.Units.All(u => u.Id != input.UnitId)) return (null, "Birim bulunamadı");
+        if (d.Units.All(u => u.Id != input.UnitId)) return (null, Lang.T("Birim bulunamadı", "Unit not found"));
         t.Name = input.Name!.Trim();
         t.UnitId = input.UnitId!;
         return (t, null);
@@ -251,44 +256,44 @@ api.MapPut("/teams/{id}", (string id, TeamInput input, DefinitionStore store) =>
         : Results.Ok(result.Team);
 });
 
-// Ekip, içinde uygulama veya bağlantı varken silinemez.
+// Ekip, içinde uygulama varken silinemez.
 api.MapDelete("/teams/{id}", (string id, DefinitionStore store) =>
 {
     var result = store.Mutate(d =>
     {
-        if (d.Apps.Any(a => a.TeamId == id)) return "Ekipte uygulama var; önce uygulamaları silin veya başka ekibe taşıyın";
-        if (d.Connections.Any(c => c.TeamId == id)) return "Ekibin bağlantı havuzunda bağlantı var; önce onları silin veya ortak havuza taşıyın";
+        if (d.Apps.Any(a => a.TeamId == id))
+            return Lang.T("Ekipte uygulama var; önce uygulamaları silin veya başka ekibe taşıyın",
+                "The team has applications; delete them or move them to another team first");
         return d.Teams.RemoveAll(t => t.Id == id) > 0 ? null : "notfound";
     });
     return result == null ? Results.NoContent() : result == "notfound" ? Results.NotFound() : Results.BadRequest(new { error = result });
 });
 
 // ---------------------------------------------------------------------------------------------
-// Bağlantı havuzu: ekip havuzları + ortak havuz (TeamId null)
+// Bağlantı havuzu: tek havuz, birim ve ekiplerden bağımsız; her bağlantı her uygulamaya atanabilir
 // ---------------------------------------------------------------------------------------------
 
-// Havuza yeni bağlantı ekler. Host ad, IP, ad:port veya tam URL olabilir. TeamId verilirse o ekibin havuzuna, verilmezse ortak
-// havuza eklenir. TargetAppId: hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği (isteğe bağlı).
+// Havuza yeni bağlantı ekler. Host ad, IP, ad:port veya tam URL olabilir. TargetAppId: hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği (isteğe bağlı).
 api.MapPost("/connections", (ConnectionInput input, DefinitionStore store) =>
 {
     if (ValidateConnection(input) is { } error) return Results.BadRequest(new { error });
 
     var conn = new ConnectionDefinition
     {
-        Id = NewId(), TeamId = NullIfEmpty(input.TeamId), Name = input.Name!.Trim(), Host = input.Host!.Trim(), Port = input.Port,
-        TargetAppId = NullIfEmpty(input.TargetAppId)
+        Id = NewId(), Name = input.Name!.Trim(), Host = input.Host!.Trim(), Port = input.Port,
+        TargetAppId = NullIfEmpty(input.TargetAppId), TlsCheck = TlsMode(input.TlsCheck)
     };
     var error2 = store.Mutate(d =>
     {
-        if (conn.TeamId != null && d.Teams.All(t => t.Id != conn.TeamId)) return "Ekip bulunamadı";
-        if (conn.TargetAppId != null && d.Apps.All(a => a.Id != conn.TargetAppId)) return "Hedef uygulama bulunamadı";
+        if (DuplicateOf(d, conn.Host, conn.Port, exceptId: null) is { } dup) return DuplicateError(dup);
+        if (conn.TargetAppId != null && d.Apps.All(a => a.Id != conn.TargetAppId)) return Lang.T("Hedef uygulama bulunamadı", "Target application not found");
         d.Connections.Add(conn);
         return null;
     });
     return error2 == null ? Results.Ok(ConnectionView.From(conn)) : Results.BadRequest(new { error = error2 });
 });
 
-// Havuzdaki bir bağlantıyı günceller. Sahibi değiştiyse (başka ekip / ortak), artık kullanamayacak uygulamalardan çıkarılır.
+// Havuzdaki bir bağlantıyı günceller.
 api.MapPut("/connections/{id}", (string id, ConnectionInput input, DefinitionStore store, MonitorService monitor) =>
 {
     if (ValidateConnection(input) is { } error) return Results.BadRequest(new { error });
@@ -297,18 +302,17 @@ api.MapPut("/connections/{id}", (string id, ConnectionInput input, DefinitionSto
     {
         var c = d.Connections.FirstOrDefault(x => x.Id == id);
         if (c == null) return (View: (ConnectionView?)null, Error: (string?)"notfound");
-        var teamId = NullIfEmpty(input.TeamId);
-        if (teamId != null && d.Teams.All(t => t.Id != teamId)) return (null, "Ekip bulunamadı");
+        // Adres değiştiyse başka bir bağlantıyla çakışmamalı (adresi değişmeyen eski çiftler yine düzenlenebilir).
+        if (EndpointKey(input.Host, input.Port) != EndpointKey(c.Host, c.Port) && DuplicateOf(d, input.Host, input.Port, exceptId: id) is { } dup)
+            return (null, DuplicateError(dup));
         var targetAppId = NullIfEmpty(input.TargetAppId);
-        if (targetAppId != null && d.Apps.All(a => a.Id != targetAppId)) return (null, "Hedef uygulama bulunamadı");
+        if (targetAppId != null && d.Apps.All(a => a.Id != targetAppId)) return (null, Lang.T("Hedef uygulama bulunamadı", "Target application not found"));
 
         c.Name = input.Name!.Trim();
         c.Host = input.Host!.Trim();
         c.Port = input.Port;
         c.TargetAppId = targetAppId;
-        c.TeamId = teamId;
-        if (teamId != null)
-            foreach (var a in d.Apps.Where(a => a.TeamId != teamId)) a.ConnectionIds.Remove(id);
+        c.TlsCheck = TlsMode(input.TlsCheck);
         return (ConnectionView.From(c), null);
     });
 
@@ -333,8 +337,7 @@ api.MapDelete("/connections/{id}", (string id, DefinitionStore store) =>
 // Uygulamalar: Monitor'de eklenmez; pod'lar anahtarlarıyla ilk bildirimde kendiliğinden kaydeder.
 // ---------------------------------------------------------------------------------------------
 
-// Uygulamanın adını ve ekibini günceller (anahtar uygulamanın kimliğidir, değişmez).
-// Ekip değiştiyse eski ekibin havuzundan atanmış bağlantılar çıkarılır (ortak bağlantılar kalır).
+// Uygulamanın adını ve ekibini günceller (anahtar uygulamanın kimliğidir, değişmez). Bağlantıları ekipten bağımsızdır, olduğu gibi kalır.
 api.MapPut("/apps/{id}", (string id, AppInput input, DefinitionStore store, MonitorService monitor) =>
 {
     if (ValidateName(input.Name) is { } error) return Results.BadRequest(new { error });
@@ -344,14 +347,10 @@ api.MapPut("/apps/{id}", (string id, AppInput input, DefinitionStore store, Moni
         var a = d.Apps.FirstOrDefault(x => x.Id == id);
         if (a == null) return (View: (AppView?)null, Error: (string?)"notfound");
         var teamId = NullIfEmpty(input.TeamId);
-        if (teamId != null && d.Teams.All(t => t.Id != teamId)) return (null, "Ekip bulunamadı");
+        if (teamId != null && d.Teams.All(t => t.Id != teamId)) return (null, Lang.T("Ekip bulunamadı", "Team not found"));
 
         a.Name = input.Name!.Trim();
-        if (a.TeamId != teamId)
-        {
-            a.TeamId = teamId;
-            a.ConnectionIds.RemoveAll(cid => d.Connections.FirstOrDefault(c => c.Id == cid) is { TeamId: { } owner } && owner != teamId);
-        }
+        a.TeamId = teamId;
         return (AppView.From(a), null);
     });
 
@@ -380,8 +379,7 @@ api.MapPost("/apps/{id}/reset", (string id, DefinitionStore store, MonitorServic
     return Results.NoContent();
 });
 
-// Sürükle-bırak: havuzdaki bir bağlantıyı uygulamayla ilişkilendirir. Ekip bağlantısı yalnızca o ekibin uygulamalarına,
-// ortak bağlantı herkese atanabilir.
+// Sürükle-bırak: havuzdaki bir bağlantıyı uygulamayla ilişkilendirir (her bağlantı her uygulamaya atanabilir).
 api.MapPut("/apps/{appId}/connections/{connId}", (string appId, string connId, DefinitionStore store, MonitorService monitor) =>
 {
     var result = store.Mutate(d =>
@@ -389,8 +387,6 @@ api.MapPut("/apps/{appId}/connections/{connId}", (string appId, string connId, D
         var a = d.Apps.FirstOrDefault(x => x.Id == appId);
         var c = d.Connections.FirstOrDefault(x => x.Id == connId);
         if (a == null || c == null) return "notfound";
-        if (c.TeamId != null && c.TeamId != a.TeamId)
-            return "Bu bağlantı başka bir ekibin havuzunda; yalnızca o ekibin uygulamalarına atanabilir (ya da ortak havuza taşıyın)";
         if (!a.ConnectionIds.Contains(connId)) a.ConnectionIds.Add(connId);
         return null;
     });
@@ -456,10 +452,29 @@ static bool FixedEquals(string? a, string? b) =>
 
 static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+// Bağlantının test edilen adresi: "host:port" (küçük harf, sondaki nokta atılır). Testler host ve port üzerinden yapıldığı için
+// "sql01:1433" ile "SQL01" + 1433, "https://github.com/" ile "https://github.com/login" aynı adrestir.
+static string? EndpointKey(string? host, int? port) =>
+    ProbeTarget.TryParse(host, port?.ToString(), out var h, out var p, out _, out _) ? h.Trim().TrimEnd('.').ToLowerInvariant() + ":" + p : null;
+
+// Havuzda aynı adresi test eden başka bir bağlantı (yoksa null).
+static ConnectionDefinition? DuplicateOf(DefinitionData d, string? host, int? port, string? exceptId)
+{
+    var key = EndpointKey(host, port);
+    return key == null ? null : d.Connections.FirstOrDefault(c => c.Id != exceptId && EndpointKey(c.Host, c.Port) == key);
+}
+
+static string DuplicateError(ConnectionDefinition existing) => Lang.T(
+    $"Bu adres havuzda zaten var: \"{existing.Name}\" ({EndpointKey(existing.Host, existing.Port)}). Aynı adres ikinci kez eklenemez; mevcut bağlantıyı kullanın.",
+    $"This address is already in the pool: \"{existing.Name}\" ({EndpointKey(existing.Host, existing.Port)}). The same address cannot be added twice; use the existing connection.");
+
+// TLS kontrolü modu: "on" / "off"; diğer her değer otomatik (null).
+static string? TlsMode(string? mode) => mode?.Trim().ToLowerInvariant() is "on" or "off" ? mode.Trim().ToLowerInvariant() : null;
+
 static string? ValidateName(string? name)
 {
-    if (string.IsNullOrWhiteSpace(name)) return "Ad zorunlu";
-    if (name.Trim().Length > 100) return "Ad en fazla 100 karakter olabilir";
+    if (string.IsNullOrWhiteSpace(name)) return Lang.T("Ad zorunlu", "Name is required");
+    if (name.Trim().Length > 100) return Lang.T("Ad en fazla 100 karakter olabilir", "Name can be at most 100 characters");
     return null;
 }
 
@@ -468,11 +483,13 @@ static string? ValidateName(string? name)
 static string? ValidateConnection(ConnectionInput i)
 {
     if (ValidateName(i.Name) is { } nameError) return nameError;
-    if (string.IsNullOrWhiteSpace(i.Host)) return "Host zorunlu";
-    if (i.Port is < 1 or > 65535) return "Port 1-65535 arasında olmalı";
+    if (string.IsNullOrWhiteSpace(i.Host)) return Lang.T("Host zorunlu", "Host is required");
+    if (i.Port is < 1 or > 65535) return Lang.T("Port 1-65535 arasında olmalı", "Port must be between 1 and 65535");
     if (!ProbeTarget.TryParse(i.Host, i.Port?.ToString(), out _, out _, out _, out var error))
         return error != null && error.StartsWith("port")
-            ? "Port zorunlu: host içinde port yoksa (sql01:1433) ve tam URL değilse (https://...) port alanını doldurun"
-            : "Host geçersiz: sunucu adı, IP, sunucu:port veya http(s):// ile başlayan bir URL olmalı";
+            ? Lang.T("Port zorunlu: host içinde port yoksa (sql01:1433) ve tam URL değilse (https://...) port alanını doldurun",
+                "Port is required: fill in the port unless the host contains one (sql01:1433) or is a full URL (https://...)")
+            : Lang.T("Host geçersiz: sunucu adı, IP, sunucu:port veya http(s):// ile başlayan bir URL olmalı",
+                "Invalid host: use a server name, IP, server:port or a URL starting with http(s)://");
     return null;
 }

@@ -12,26 +12,31 @@
 <body class="login-page">
   <div class="login-bg" aria-hidden="true"></div>
   <header class="topbar">
-    <div class="logo">CONNECTIVITY<span>monitor</span></div>
+    <div class="logo">CONNECTIVITY</div>
+    <div class="spacer"></div>
+    <div class="lang-switch" role="group" title="Dil / Language">
+      <button type="button" data-lang="tr">TR</button><button type="button" data-lang="en">EN</button>
+    </div>
   </header>
 
   <main class="login-wrap">
     <form id="loginForm" class="login-card" autocomplete="on">
-      <h1>Oturum Aç</h1>
+      <h1 data-i18n="login.title">Oturum Aç</h1>
       <label class="login-field">
-        <span>Kullanıcı adı</span>
+        <span data-i18n="login.user">Kullanıcı adı</span>
         <input id="username" name="username" autocomplete="username" required>
       </label>
       <label class="login-field">
-        <span>Şifre</span>
+        <span data-i18n="login.password">Şifre</span>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
       </label>
       <p id="loginError" class="error" role="alert"></p>
-      <button type="submit" class="nf-btn red">Oturum Aç</button>
-      <p class="login-hint">Kullanıcı adı ve şifre Monitor ayarlarında tanımlıdır (Monitor:AdminUser, Monitor:AdminPassword).</p>
+      <button type="submit" class="nf-btn red" data-i18n="login.title">Oturum Aç</button>
+      <p class="login-hint" data-i18n="login.hint">Kullanıcı adı ve şifre Monitor ayarlarında tanımlıdır (Monitor:AdminUser, Monitor:AdminPassword).</p>
     </form>
   </main>
 
+  <script src="i18n.js"></script>
   <script src="login.js"></script>
 </body>
 </html>

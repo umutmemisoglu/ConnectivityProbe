@@ -305,9 +305,23 @@ td.callerr { background: var(--bad-bg); color: var(--bad); }
 
 /* ---------- Tanımlar ---------- */
 #tab-defs { padding: 92px var(--gutter) 50px; }
-.defs-grid { display: grid; grid-template-columns: 260px minmax(280px, 380px) 1fr; gap: 16px; align-items: start; }
-@media (max-width: 1100px) { .defs-grid { grid-template-columns: 240px 1fr; } .defs-grid #appsPanel { grid-column: 1 / -1; } }
-@media (max-width: 700px) { .defs-grid { grid-template-columns: 1fr; } }
+/* Tanımlar: ağaç | havuz | uygulamalar her zaman yan yana; her panel kendi içinde kayar. Böylece bir bağlantıyı havuzdan
+   uygulamaya (veya bir uygulamayı ekibe) sürüklerken sayfa kaydırmak gerekmez. */
+.defs-grid { display: grid; grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.defs-grid > #poolPanel { position: sticky; top: 76px; max-height: calc(100vh - 92px); overflow-y: auto; }
+.defs-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (max-width: 1100px) { .defs-grid { grid-template-columns: 300px minmax(0, 1fr); gap: 12px; } .defs-grid .panel { padding: 12px; } }
+@media (max-width: 700px) { .defs-grid { grid-template-columns: 1fr; } .defs-grid > #poolPanel { position: static; max-height: none; } }
+
+/* Birimler ve ekipler: uygulamaların üstünde, aynı genişlikte; her birimin ekipleri yan yana (sığmazsa alt satıra) dizilir. */
+#treePanel .tree-unit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+#treePanel .tree-unit-head { flex: 1 0 100%; border-bottom: 1px solid var(--border); }
+#treePanel .tree-team { padding: 5px 8px; border-left: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
+#treePanel .tree-team .grow { flex: 0 1 auto; }
+#treePanel .tree-team.sel { border-color: var(--accent); background: var(--drop); }
+#treePanel .tree-team.unassigned { margin-top: 0; border-style: dashed; display: inline-flex; }
+#treePanel .tree-empty { padding: 2px 0; }
+#treePanel .tree-team .icon-btn { padding: 2px 3px; }
 
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -439,10 +453,90 @@ td.callerr { background: var(--bad-bg); color: var(--bad); }
 .add-help { margin-bottom: 12px; }
 .app-head .url code, .m-side code { font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
 
-#tab-versions { padding: 92px var(--gutter) 50px; }
-.v-head h2 { margin: 0 0 6px; font-size: 1.5rem; }
-.v-clusters { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 22px; }
-.v-cluster { display: flex; align-items: center; gap: 8px; min-width: 220px; padding: 10px 12px; border-radius: 6px;
-  background: var(--surface); border: 1px solid var(--border); }
-.v-cluster .pid { font: 11px ui-monospace, Consolas, monospace; color: var(--muted); }
+/* ---------- 2.1: dil seçimi, ağ (cluster) grupları, detay penceresinde sürümler ---------- */
+.lang-switch { display: flex; border: 1px solid rgba(255, 255, 255, .35); border-radius: 4px; overflow: hidden; flex: none; }
+.lang-switch button { border: 0; background: transparent; color: var(--text-2); padding: 5px 9px; cursor: pointer;
+  font: 700 11px Inter, sans-serif; letter-spacing: .08em; }
+.lang-switch button:hover { color: var(--text); }
+.lang-switch button.active { background: rgba(255, 255, 255, .9); color: #141414; }
+/* Tanımlar: arama, kullanım sayısı, durum noktası, sürükleme hedefleri, üzerine gelince görünen düğmeler */
+.pool-adds { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pool-search { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; padding: 7px 10px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--border); position: sticky; top: -16px; z-index: 2; }
+.pool-search:focus-within { border-color: var(--text-2); }
+.pool-search svg { width: 16px; height: 16px; fill: var(--muted); flex: none; }
+.pool-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 13.5px; }
+.chip mark { background: rgba(245, 181, 10, .35); color: inherit; border-radius: 2px; padding: 0 1px; }
+.usage { font-size: 11.5px; color: var(--text-2); background: var(--surface-3); border-radius: 999px; padding: 0 7px; cursor: help; }
+.usage.unused { color: var(--muted); background: transparent; border: 1px dashed var(--border); }
+.pool-label { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.health { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--border); }
+.health.ok { background: var(--ok); }
+.health.warn { background: var(--warn); }
+.health.bad { background: var(--bad); }
+.dropzone .chip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; max-width: 100%; }
+.dropzone .chip .target { word-break: break-all; }
+.defs-grid > .panel { overflow-x: hidden; }
+.app-head { flex-wrap: wrap; }
+.app-head .grow { flex-basis: 180px; }
+.app-live { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px; }
+.app-live .ver { margin: 0; }
+.app-card[draggable="true"] { cursor: grab; }
+.app-card .dropzone, .app-card select, .app-card button { cursor: auto; }
+.app-card .btn.small { white-space: nowrap; }
+body.dragging-app .tree-team[data-team-drop] { outline: 1px dashed var(--border); outline-offset: -1px; }
+.tree-team.drag-over { background: var(--drop) !important; outline: 2px dashed var(--accent) !important; outline-offset: -2px; }
+body.dragging-conn .app-card { outline: 1px dashed var(--border); }
+/* Düzenle / sil düğmeleri yalnızca satırın üzerine gelince (veya klavyeyle odaklanınca) görünür; dokunmatik ekranda hep görünür. */
+.hover-actions .act { opacity: 0; transition: opacity .12s; }
+.hover-actions:hover > .act, .hover-actions:focus-within > .act,
+.hover-actions:hover > .app-head > .act, .hover-actions:focus-within > .app-head > .act { opacity: 1; }
+@media (hover: none) { .hover-actions .act { opacity: 1; } }
+
+/* Kaynaklar tablosu, TLS / DNS / yavaşlık işaretleri */
+.res-table td { vertical-align: top; min-width: 110px; }
+.res-table .rowhead { min-width: 190px; }
+.res-table .rowhead .ep-state { display: inline-block; margin: 4px 4px 0 0; white-space: nowrap; font-size: 10px; }
+.res-val { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.res-val.bad, .res-val.bad b { color: var(--bad); }
+.res-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; white-space: nowrap; }
+.res-table tr.grp-row td { background: #2a2a2a; font: 1rem/1.1 var(--display); letter-spacing: .06em; padding: 6px 12px; }
+.spark { display: block; width: 100%; max-width: 140px; height: 22px; margin-top: 6px; }
+.spark polyline { fill: none; stroke: var(--text-2); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark.cpu polyline { stroke: #5aa9ff; }
+.spark.mem polyline { stroke: var(--ok); }
+.spark.bad polyline { stroke: var(--bad); }
+.cell .dns, .cell .tls, .cell .slow-tag { display: block; font-size: 11px; margin-top: 3px; white-space: nowrap; }
+.cell .dns { color: var(--muted); }
+.cell .tls.ok { color: var(--ok); }
+.cell .tls.warn { color: var(--warn); font-weight: 700; }
+.cell .tls.bad { color: var(--bad); font-weight: 700; }
+.cell .slow-tag { display: inline-block; padding: 0 5px; border-radius: 3px; background: var(--warn); color: #141414; font-weight: 700; letter-spacing: .05em; }
+.cell.ok.slow { background: var(--warn-bg); }
+.ip-change { display: block; margin-top: 4px; font-size: 11.5px; color: var(--warn); }
+.tls-tag { font-size: 11px; }
+
+/* Uygulama detay sayfası (/?app=...): kartın açtığı yeni sekme; afiş üst menünün arkasından başlar. */
+a.logo { text-decoration: none; }
+.detail-page { max-width: 1280px; margin: 0 auto 40px; }
+.detail-page .m-hero { height: clamp(300px, 34vw, 420px); padding-top: 70px; }
+.detail-page .m-close { top: 84px; }
+.detail-missing { padding: 120px var(--gutter); }
+.detail-missing a { color: var(--text); margin-left: 8px; }
+
+/* Üst menü dar ekranlarda sığsın: önce güncelleme bilgisi gizlenir, sonra arama kutusu daralır. */
+@media (max-width: 1400px) { .meta { display: none; } }
+@media (max-width: 1200px) and (min-width: 981px) { .topbar { gap: 14px; } .nav-search { width: 190px; } }
+.ep-cluster .net { font: 12px ui-monospace, Consolas, monospace; color: var(--muted); }
+.ep-cluster .icon-btn { align-self: center; }
+.matrix th.grp { text-align: center; background: #2a2a2a; font: 1rem/1.1 var(--display); letter-spacing: .06em; border-left: 2px solid #555; }
+.matrix th.grp .pid { font-family: ui-monospace, Consolas, monospace; letter-spacing: 0; }
+.matrix .grp-start { border-left: 2px solid #555; }
+.matrix th .ver-odd { color: var(--warn); font-weight: 700; }
 .v-table td { vertical-align: top; }
+.v-table td.vcount { text-align: center; font-size: 14px; }
+.v-table td.vcount.odd b { color: var(--warn); }
+.v-table .rowhead .ver { margin-bottom: 3px; }
+
+/* Bağlantı formunda aynı adres uyarısı */
+.dlg-warn { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); font-size: 13px; line-height: 1.45; }

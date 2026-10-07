@@ -12,23 +12,25 @@
 <body>
   <!-- Üst menü: sayfanın üstünde saydam, aşağı kaydırınca koyulaşır -->
   <header class="topbar" id="topbar">
-    <div class="logo">CONNECTIVITY<span>monitor</span></div>
+    <a class="logo" href="/">CONNECTIVITY</a>
     <nav class="tabs">
-      <button class="tab" data-tab="monitor">Monitör</button>
-      <button class="tab" data-tab="versions">Sürümler</button>
-      <button class="tab" data-tab="defs">Tanımlar</button>
+      <button class="tab" data-tab="monitor" data-i18n="tab.monitor">Monitör</button>
+      <button class="tab" data-tab="defs" data-i18n="tab.defs">Tanımlar</button>
     </nav>
     <div class="spacer"></div>
     <div class="nav-tools" id="navTools">
       <label class="nav-search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.8 4.8-1.4 1.4-4.8-4.8A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></svg>
-        <input id="search" type="search" placeholder="Uygulama, anahtar, ekip, sürüm, cluster" autocomplete="off">
+        <input id="search" type="search" data-i18n-placeholder="search.placeholder" autocomplete="off">
       </label>
-      <label class="pill-toggle"><input id="onlyProblems" type="checkbox"><span>Sadece sorunlular</span></label>
+      <label class="pill-toggle"><input id="onlyProblems" type="checkbox"><span data-i18n="onlyProblems">Sadece sorunlular</span></label>
     </div>
     <span id="meta" class="meta"></span>
-    <button id="runNow" class="btn primary">Şimdi test et</button>
-    <button id="logout" class="btn" hidden title="Oturumu kapat">Çıkış</button>
+    <div class="lang-switch" role="group" data-i18n-title="lang.title">
+      <button type="button" data-lang="tr">TR</button><button type="button" data-lang="en">EN</button>
+    </div>
+    <button id="runNow" class="btn primary" data-i18n="runNow">Şimdi test et</button>
+    <button id="logout" class="btn" hidden data-i18n="logout" data-i18n-title="logout.title">Çıkış</button>
   </header>
 
   <main>
@@ -38,42 +40,44 @@
       <div id="monitorList" class="rows"></div>
     </section>
 
-    <!-- Sürümler: cluster'lar ve her uygulamanın cluster bazında çalışan sürümleri -->
-    <section id="tab-versions" class="versions" hidden></section>
-
-    <!-- Tanımlar: solda birim/ekip ağacı, ortada seçili ekibin ve ortak havuzun bağlantıları, sağda ekibin uygulamaları -->
+    <!-- Tanımlar: solda bağlantı havuzu (sayfa kayarken yerinde kalır); sağda üstte birimler/ekipler, altında seçili ekibin uygulamaları -->
     <section id="tab-defs" hidden>
       <div class="defs-grid">
-        <aside class="panel">
-          <div class="panel-head">
-            <h2>Birimler ve ekipler</h2>
-            <button id="addUnit" class="btn small">+ Birim</button>
-          </div>
-          <div id="tree"></div>
-        </aside>
         <div class="panel" id="poolPanel"></div>
-        <div class="panel" id="appsPanel"></div>
+        <div class="defs-right">
+          <aside class="panel" id="treePanel">
+            <div class="panel-head">
+              <h2 data-i18n="defs.unitsTeams">Birimler ve ekipler</h2>
+              <button id="addUnit" class="btn small" data-i18n="defs.addUnit">+ Birim</button>
+            </div>
+            <div id="tree"></div>
+          </aside>
+          <div class="panel" id="appsPanel"></div>
+        </div>
       </div>
     </section>
   </main>
 
-  <!-- Uygulama detayı: karta tıklayınca açılır -->
-  <dialog id="appModal" class="nf-modal">
-    <div id="appModalBody"></div>
-  </dialog>
+  <!-- Uygulama detayı: karta tıklayınca yeni sekmede açılır (/?app=<kimlik>) -->
+  <section id="tab-detail" class="detail-page" hidden>
+    <div id="detailBody"></div>
+  </section>
 
   <dialog id="dlg">
     <form id="dlgForm">
       <h3 id="dlgTitle"></h3>
       <div id="dlgFields"></div>
+      <p id="dlgWarn" class="dlg-warn" hidden></p>
       <p id="dlgError" class="error"></p>
       <div class="dlg-actions">
-        <button type="button" id="dlgCancel" class="btn">Vazgeç</button>
-        <button type="submit" class="btn primary">Kaydet</button>
+        <button type="button" id="dlgCancel" class="btn" data-i18n="dlg.cancel">Vazgeç</button>
+        <button type="submit" class="btn primary" data-i18n="dlg.save">Kaydet</button>
       </div>
     </form>
   </dialog>
 
+  <script src="i18n.js"></script>
+  <script src="search.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

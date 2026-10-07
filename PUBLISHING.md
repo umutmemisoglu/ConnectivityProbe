@@ -5,12 +5,12 @@ Monitor, örnek uygulama ve testler pakete girmez.
 
 ## Kısa yol (kullanılan yöntem): GitHub Actions
 
-1. `src/ConnectivityProbe/CHANGELOG.md` dosyasına yeni sürümün bölümünü ekleyin (`## 2.1.0`, altında `### English` ve `### Türkçe`).
+1. `src/ConnectivityProbe/CHANGELOG.md` dosyasına yeni sürümün bölümünü ekleyin (`## 2.2.0`, altında `### English` ve `### Türkçe`).
 2. `ConnectivityProbe.csproj` içindeki `<Version>` değerini artırın, commit edip `main`'e gönderin.
 3. Etiketi gönderin:
    ```bash
-   git tag -a v2.1.0 -m "ConnectivityProbe 2.1.0"
-   git push origin v2.1.0
+   git tag -a v2.2.0 -m "ConnectivityProbe 2.2.0"
+   git push origin v2.2.0
    ```
 
 `.github/workflows/publish.yml` testleri çalıştırır, paketi etiketteki sürümle üretir ve nuget.org'a API anahtarı olmadan
@@ -30,7 +30,7 @@ Sonra `src/ConnectivityProbe/ConnectivityProbe.csproj` içindeki paket bilgileri
 | Alan | Şu anki değer | Not |
 |---|---|---|
 | `PackageId` | `ConnectivityProbe` | nuget.org'da paket adı ilk yükleyen hesaba bağlanır; ilk yüklemeden sonra bu ad yalnızca sizin hesabınızla güncellenebilir. |
-| `Version` | `2.0.0` | Her yayında artırın (aşağıya bakın). Aynı sürüm ikinci kez yüklenemez. |
+| `Version` | `2.1.0` | Her yayında artırın (aşağıya bakın). Aynı sürüm ikinci kez yüklenemez. |
 | `Authors` / `Copyright` | `Fatih Umut Memişoğlu` | Paket sayfasında yazar ve telif sahibi olarak görünür. |
 | Lisans | `MIT` | Açık kaynak. Pakette `PackageLicenseExpression`, depoda kökteki `LICENSE` dosyası. |
 | `RepositoryUrl` / `PackageProjectUrl` | `https://github.com/umutmemisoglu/ConnectivityProbe` | nuget.org sayfasında "Source repository" bağlantısı olarak görünür. |
@@ -63,7 +63,7 @@ dotnet pack src/ConnectivityProbe/ConnectivityProbe.csproj -c Release -o artifac
 
 ```bash
 dotnet nuget add source <repo>/artifacts -n localcp
-dotnet add package ConnectivityProbe --version 2.0.0
+dotnet add package ConnectivityProbe --version 2.1.0
 ```
 
 ## 4. nuget.org'a yükleme
@@ -78,7 +78,7 @@ dotnet add package ConnectivityProbe --version 2.0.0
 3. **Yükleyin.** `.snupkg` dosyası aynı klasörde olduğu için semboller de otomatik yüklenir:
 
    ```bash
-   dotnet nuget push artifacts/ConnectivityProbe.2.0.0.nupkg --api-key <API_ANAHTARI> --source https://api.nuget.org/v3/index.json
+   dotnet nuget push artifacts/ConnectivityProbe.2.1.0.nupkg --api-key <API_ANAHTARI> --source https://api.nuget.org/v3/index.json
    ```
 
    Anahtarı komut geçmişinde bırakmamak için ortam değişkeniyle de verebilirsiniz:
@@ -96,7 +96,7 @@ Paket yalnızca şirket içinde kullanılacaksa nuget.org yerine iç feed'e yük
 ProGet...):
 
 ```bash
-dotnet nuget push artifacts/ConnectivityProbe.2.0.0.nupkg --api-key <ANAHTAR> --source <İÇ_FEED_URL>
+dotnet nuget push artifacts/ConnectivityProbe.2.1.0.nupkg --api-key <ANAHTAR> --source <İÇ_FEED_URL>
 ```
 
 Tüketen projelere feed'i ekleyin (`nuget.config`):
@@ -134,7 +134,7 @@ Kaynak kopyası (`src/ConnectivityProbe` projesi) yerine paketi kullanmak için:
 2. Merkezi paket yönetimi (Central Package Management) kullanılıyorsa:
    - `Directory.Packages.props` dosyasına ekleyin:
      ```xml
-     <PackageVersion Include="ConnectivityProbe" Version="2.0.0" />
+     <PackageVersion Include="ConnectivityProbe" Version="2.1.0" />
      ```
    - `Web.csproj` içinde `ProjectReference` yerine:
      ```xml

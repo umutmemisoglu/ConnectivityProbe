@@ -28,4 +28,22 @@ public sealed class MonitorOptions
     /// Varsayılan: 3.
     /// </summary>
     public int MissingAfterCycles { get; set; } = 3;
+
+    /// <summary>Uyarı eşikleri (bkz. <see cref="AlertOptions"/>).</summary>
+    public AlertOptions Alerts { get; set; } = new();
+}
+
+/// <summary>Kaynak, sertifika ve bağlantı uyarılarının eşikleri ("Monitor:Alerts" bölümü).</summary>
+public sealed class AlertOptions
+{
+    /// <summary>Container bellek kullanımı limitin bu yüzdesini geçerse uyarı (sorunlu). Varsayılan: 90.</summary>
+    public int MemoryPercent { get; set; } = 90;
+    /// <summary>CPU limiti yüzünden yavaşlatılma oranı bu yüzdeyi geçerse bilgi notu. Varsayılan: 25.</summary>
+    public int CpuThrottledPercent { get; set; } = 25;
+    /// <summary>TCP soketleri (kurulu + TIME_WAIT) yerel port aralığının bu yüzdesini geçerse uyarı (sorunlu). Varsayılan: 70.</summary>
+    public int PortsPercent { get; set; } = 70;
+    /// <summary>Sertifikanın bitişine bu kadar gün kala uyarı (sorunlu). Varsayılan: 14.</summary>
+    public int CertificateDays { get; set; } = 14;
+    /// <summary>Yeniden başlama, OOM ve IP değişikliği bu kadar dakika boyunca gösterilir. Varsayılan: 60.</summary>
+    public int RecentMinutes { get; set; } = 60;
 }

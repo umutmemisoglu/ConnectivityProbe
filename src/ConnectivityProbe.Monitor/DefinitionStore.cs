@@ -25,7 +25,16 @@ public sealed class DefinitionStore
 
         // step 3: 2.0'da Discover modu kalktı; uygulamalar anahtarlarıyla kendini kaydeder. Anahtarı olmayan eski (Discover)
         //         uygulama kayıtlarını kaldırıyoruz. Bağlantı havuzu, birimler ve ekipler olduğu gibi kalır.
-        if (_data.Apps.RemoveAll(a => string.IsNullOrWhiteSpace(a.AppKey)) > 0) Save();
+        var changed = _data.Apps.RemoveAll(a => string.IsNullOrWhiteSpace(a.AppKey)) > 0;
+
+        // step 4: 2.1'de cluster'lar pod ağıyla (ör. 10.42.0.0/16) kendiliğinden adlandırılıyor. 2.0'ın verdiği "Cluster N"
+        //         adlarını boşaltıyoruz (boş ad = otomatik ad); elle verilen adlar kalır.
+        foreach (var c in _data.Clusters.Where(c => System.Text.RegularExpressions.Regex.IsMatch(c.Name, @"^Cluster \d+$")))
+        {
+            c.Name = "";
+            changed = true;
+        }
+        if (changed) Save();
     }
 
     /// <summary>Tanımların saklandığı dosyanın tam yolu (diğer kalıcı dosyalar aynı klasöre yazılır).</summary>

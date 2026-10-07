@@ -19,6 +19,7 @@ public sealed class MonitorService : BackgroundService
         public readonly Dictionary<string, int> PollSeconds = new();            // pod -> bildirim sıklığı (sn)
         public readonly Dictionary<string, PodConnectionCell> Results = new();   // anahtar: bağlantıId|podId
         public readonly List<HistoryPoint> History = new();
+        public readonly Dictionary<string, List<ResourcePoint>> Resources = new(); // pod -> son kaynak ölçümleri
         /// <summary>Bilinen pod'ların hepsinin canlı olduğu son andaki pod sayısı (deploy ile "pod çöktü"yü ayırmak için).</summary>
         public int ExpectedPods;
         public DateTime LastHistoryUtc;
@@ -98,14 +99,19 @@ public sealed class MonitorService : BackgroundService
 
     /// <summary>
     /// Pod bildirimini işler: pod'u canlı olarak işaretler, test sonuçları varsa pod'un hücrelerine yazar ve pod'a uygulamanın
-    /// güncel bağlantılarını döner. Pod'un cluster'ı ilk kez görülüyorsa "Cluster N" adıyla kaydedilir.
+    /// güncel bağlantılarını döner. Pod'un cluster'ı ilk kez görülüyorsa kaydedilir (adı pod ağından türetilir).
     /// </summary>
-    /// <param name="sourceIp">Bildirimin geldiği adres; Kubernetes cluster kimliği yoksa pod'lar buna göre gruplanır.</param>
+    /// <param name="sourceIp">Bildirimin geldiği adres; pod kendi adresini bildirmediyse yedek olarak kullanılır.</param>
     public AgentAssignment AcceptAgentReport(AppDefinition app, DefinitionData defs, AgentReport report, string sourceIp)
     {
         var now = DateTime.UtcNow;
         var pod = report.Pod;
-        var clusterKey = !string.IsNullOrEmpty(pod.ClusterId) ? "k8s:" + pod.ClusterId : "net:" + sourceIp;
+
+        // Cluster: Kubernetes'te cluster sertifikasının parmak izi (aynı pod ağını kullanan iki cluster da ayrılır);
+        // Kubernetes dışında pod'un ağı (ör. 10.80.0.0/16).
+        var primary = Network.PrimaryOf(pod.PrimaryAddress, pod.LocalAddresses, sourceIp);
+        var network = Network.Of(primary);
+        var clusterKey = !string.IsNullOrEmpty(pod.ClusterId) ? "k8s:" + pod.ClusterId : "net:" + (network ?? sourceIp);
         if (defs.Clusters.All(c => c.Key != clusterKey)) EnsureCluster(clusterKey);
 
         var rt = _runtime.GetOrAdd(app.Id, _ => new AppRuntime());
@@ -117,14 +123,31 @@ public sealed class MonitorService : BackgroundService
         lock (rt)
         {
             // step 1: Pod'u canlı olarak kaydediyoruz (yeni bir pod ise listeye girer).
-            isNew = !rt.Known.ContainsKey(pod.InstanceId);
+            //         Aynı pod yeni bir süreçle geldiyse (başlangıç zamanı değişti) yeniden başlamış demektir; OOM kill sayacı
+            //         arttıysa container bellek yüzünden süreç öldürmüştür.
+            isNew = !rt.Known.TryGetValue(pod.InstanceId, out var previous);
+            var restarted = previous?.StartedAtUtc is { } before && pod.StartedAtUtc - before > TimeSpan.FromSeconds(2);
+            var oom = report.Resources?.OomKills is { } kills && previous?.Resources?.OomKills is { } killsBefore && kills > killsBefore;
             rt.Known[pod.InstanceId] = new PodStatus
             {
                 InstanceId = pod.InstanceId, MachineName = pod.MachineName, Addresses = pod.LocalAddresses,
-                StartedAtUtc = pod.StartedAtUtc, Details = new Dictionary<string, string>(pod.Environment), LastSeenUtc = now,
+                PrimaryAddress = primary, Network = network, StartedAtUtc = pod.StartedAtUtc, Details = new Dictionary<string, string>(pod.Environment), LastSeenUtc = now,
                 ProbeVersion = pod.ProbeVersion, AppVersion = pod.AppVersion, BuildId = pod.BuildId, BuildDateUtc = pod.BuildDateUtc,
-                ClusterKey = clusterKey, Namespace = pod.Namespace, SourceIp = sourceIp
+                ClusterKey = clusterKey, Namespace = pod.Namespace, SourceIp = sourceIp,
+                Resources = report.Resources,
+                Restarts = (previous?.Restarts ?? 0) + (restarted ? 1 : 0),
+                LastRestartUtc = restarted ? now : previous?.LastRestartUtc,
+                LastOomUtc = oom ? now : previous?.LastOomUtc
             };
+            if (restarted) _log.LogWarning("Pod {Pod} of app {App} restarted", pod.InstanceId, app.Name);
+
+            // Grafikler için son 60 ölçüm (varsayılan bildirim aralığıyla ~10 dakika).
+            if (report.Resources is { } r)
+            {
+                if (!rt.Resources.TryGetValue(pod.InstanceId, out var points)) rt.Resources[pod.InstanceId] = points = new List<ResourcePoint>();
+                points.Add(new ResourcePoint(now, r.CpuCores, r.MemoryBytes ?? r.WorkingSetBytes, r.CpuThrottledPercent, r.NetRxBytes, r.NetTxBytes));
+                if (points.Count > 60) points.RemoveRange(0, points.Count - 60);
+            }
             rt.Missed[pod.InstanceId] = 0;
             rt.PollSeconds[pod.InstanceId] = Math.Clamp(report.PollSeconds, 1, 300);
 
@@ -135,8 +158,8 @@ public sealed class MonitorService : BackgroundService
                 if (conn == null) continue; // tanım bu arada uygulamadan çıkarılmış
 
                 var cell = result.Tcp != null
-                    ? FromTcp(result.Tcp, pod.InstanceId, now)
-                    : new PodConnectionCell { InstanceId = pod.InstanceId, Error = result.Error ?? "Test sonucu yok", CheckedAtUtc = now };
+                    ? FromTcp(result.Tcp, result.Tls, pod.InstanceId, now)
+                    : new PodConnectionCell { InstanceId = pod.InstanceId, Error = result.Error ?? "No test result", CheckedAtUtc = now };
                 StoreCell(rt, conn.Id, cell);
             }
         }
@@ -150,7 +173,7 @@ public sealed class MonitorService : BackgroundService
 
         return new AgentAssignment(
             app.Id, app.Name, (int)TestInterval.TotalSeconds, RunRequestId, Math.Max(500, _opt.ProbeTimeoutMs),
-            connections.Select(c => new AgentConnection(c.Id, c.Name, c.Host, c.Port)).ToList());
+            connections.Select(c => new AgentConnection(c.Id, c.Name, c.Host, c.Port, c.TlsEnabled())).ToList());
     }
 
     /// <summary>Pod düzgün kapanıyor: alarm vermeden listeden çıkarılır (deploy, scale-down).</summary>
@@ -169,14 +192,55 @@ public sealed class MonitorService : BackgroundService
         return true;
     }
 
-    // İlk kez görülen cluster'ı "Cluster N" adıyla kaydeder (ad Monitor'de değiştirilebilir).
+    // İlk kez görülen cluster'ı kaydeder. Ad boş kalır: görünen ad pod'ların ağından türetilir, Monitor'de elle verilebilir.
     private void EnsureCluster(string key) =>
         _store.Mutate(d =>
         {
             if (d.Clusters.Any(c => c.Key == key)) return 0;
-            d.Clusters.Add(new ClusterDefinition { Key = key, Name = "Cluster " + (d.Clusters.Count + 1) });
+            d.Clusters.Add(new ClusterDefinition { Key = key });
             return 1;
         });
+
+    /// <summary>
+    /// Cluster'ların görünen adları: elle verilen ad, yoksa pod'larının ağları ("10.42.0.0/16"). Aynı ağı kullanan iki
+    /// Kubernetes cluster'ı (ör. ikisi de varsayılan 10.42.0.0/16) kimliklerinin kısa haliyle ayrılır.
+    /// </summary>
+    private Dictionary<string, ClusterView> BuildClusters(DefinitionData defs)
+    {
+        // step 1: Her cluster'da görülen ağlar (tüm uygulamaların pod'larından).
+        var networks = new Dictionary<string, SortedSet<string>>();
+        foreach (var rt in _runtime.Values)
+            lock (rt)
+                foreach (var p in rt.Known.Values.Where(p => p.ClusterKey != null))
+                {
+                    if (!networks.TryGetValue(p.ClusterKey!, out var set)) networks[p.ClusterKey!] = set = new SortedSet<string>(StringComparer.Ordinal);
+                    var net = p.Network ?? Network.Of(Network.PrimaryOf(p.PrimaryAddress, p.Addresses, p.SourceIp));
+                    if (net != null) set.Add(net);
+                }
+
+        // step 2: Ad: elle verilen ya da ağlar; Kubernetes dışında anahtar zaten ağın kendisidir.
+        string AutoName(string key) =>
+            networks.TryGetValue(key, out var set) && set.Count > 0 ? string.Join(", ", set)
+            : key.StartsWith("net:", StringComparison.Ordinal) ? key[4..] : key;
+
+        var views = defs.Clusters.Select(c => new
+        {
+            c.Key,
+            Custom = !string.IsNullOrWhiteSpace(c.Name),
+            Name = string.IsNullOrWhiteSpace(c.Name) ? AutoName(c.Key) : c.Name.Trim(),
+            Networks = networks.TryGetValue(c.Key, out var set) ? set.ToList() : new List<string>()
+        }).ToList();
+
+        // step 3: Aynı otomatik adı alan cluster'lara kısa kimlik ekliyoruz.
+        var duplicate = views.Where(v => !v.Custom).GroupBy(v => v.Name).Where(g => g.Count() > 1).SelectMany(g => g).Select(v => v.Key).ToHashSet();
+        static string ShortId(string key)
+        {
+            var id = key[(key.IndexOf(':') + 1)..];
+            return id.Length > 6 ? id[..6] : id;
+        }
+        return views.ToDictionary(v => v.Key, v => new ClusterView(
+            v.Key, duplicate.Contains(v.Key) ? v.Name + " · " + ShortId(v.Key) : v.Name, v.Networks, v.Custom, 0, 0));
+    }
 
     // ---------------------------------------------------------------------------------------------
     // Durum hesaplama
@@ -188,17 +252,19 @@ public sealed class MonitorService : BackgroundService
         var defs = _store.Snapshot();
         var apps = defs.Apps.Select(a => _latest.TryGetValue(a.Id, out var s)
             ? s
-            : new AppStatus { AppId = a.Id, Name = a.Name, AppKey = a.AppKey, Message = "Pod bildirimi bekleniyor" }).ToList();
+            : new AppStatus { AppId = a.Id, Name = a.Name, AppKey = a.AppKey, Notes = { new StatusNote("waiting") } }).ToList();
 
-        // Cluster'lar: canlı pod sayısı ve kaç uygulamanın pod'u olduğu.
-        var clusters = defs.Clusters.Select(c => new ClusterView(
-            c.Key, c.Name,
-            apps.Sum(a => a.Pods.Count(p => p.ClusterKey == c.Key && p.State == "up")),
-            apps.Count(a => a.Pods.Any(p => p.ClusterKey == c.Key)))).ToList();
+        // Cluster'lar: görünen ad, canlı pod sayısı ve kaç uygulamanın pod'u olduğu.
+        var clusters = BuildClusters(defs).Values.Select(c => c with
+        {
+            Pods = apps.Sum(a => a.Pods.Count(p => p.ClusterKey == c.Key && p.State == "up")),
+            Apps = apps.Count(a => a.Pods.Any(p => p.ClusterKey == c.Key))
+        }).ToList();
 
         return new MonitorSnapshot
         {
             IntervalSeconds = (int)TestInterval.TotalSeconds, MissingAfterCycles = Threshold, LastRunUtc = _lastRunUtc,
+            CertificateDays = _opt.Alerts.CertificateDays,
             Apps = apps, Clusters = clusters
         };
     }
@@ -225,7 +291,8 @@ public sealed class MonitorService : BackgroundService
         foreach (var key in _runtime.Keys.Where(k => !ids.Contains(k))) _runtime.TryRemove(key, out _);
         foreach (var key in _latest.Keys.Where(k => !ids.Contains(k))) _latest.TryRemove(key, out _);
 
-        foreach (var app in defs.Apps) _latest[app.Id] = Compute(app, defs, now);
+        var clusterNames = BuildClusters(defs).ToDictionary(kv => kv.Key, kv => kv.Value.Name);
+        foreach (var app in defs.Apps) _latest[app.Id] = Compute(app, clusterNames, defs, now);
         _lastRunUtc = now;
 
         // Pod listesini test aralığında bir diske yazıyoruz (yeni pod / kapanış / sıfırlama anında ayrıca yazılır).
@@ -233,13 +300,12 @@ public sealed class MonitorService : BackgroundService
     }
 
     /// <summary>Uygulamanın durumunu pod bildirimlerinden hesaplar.</summary>
-    private AppStatus Compute(AppDefinition app, DefinitionData defs, DateTime now)
+    private AppStatus Compute(AppDefinition app, Dictionary<string, string> clusterNames, DefinitionData defs, DateTime now)
     {
         var rt = _runtime.GetOrAdd(app.Id, _ => new AppRuntime());
         var interval = TestInterval;
         var threshold = Threshold;
         var status = new AppStatus { AppId = app.Id, Name = app.Name, AppKey = app.AppKey, CheckedAtUtc = now };
-        var clusterNames = defs.Clusters.ToDictionary(c => c.Key, c => c.Name);
         var connections = app.ConnectionIds
             .Select(id => defs.Connections.FirstOrDefault(c => c.Id == id))
             .Where(c => c != null).Select(c => c!).ToList();
@@ -288,12 +354,17 @@ public sealed class MonitorService : BackgroundService
                 .Select(p => new PodStatus
                 {
                     InstanceId = p.InstanceId, MachineName = p.MachineName, Addresses = p.Addresses, StartedAtUtc = p.StartedAtUtc,
+                    PrimaryAddress = p.PrimaryAddress ?? Network.PrimaryOf(null, p.Addresses, p.SourceIp),
+                    Network = p.Network ?? Network.Of(Network.PrimaryOf(null, p.Addresses, p.SourceIp)),
                     Details = p.Details, LastSeenUtc = p.LastSeenUtc, ProbeVersion = p.ProbeVersion, AppVersion = p.AppVersion,
                     BuildId = p.BuildId, BuildDateUtc = p.BuildDateUtc, ClusterKey = p.ClusterKey,
                     ClusterName = p.ClusterKey != null && clusterNames.TryGetValue(p.ClusterKey, out var cn) ? cn : null,
                     Namespace = p.Namespace, SourceIp = p.SourceIp,
                     Seen = states[p.InstanceId] == "up", MissedCycles = rt.Missed.TryGetValue(p.InstanceId, out var mc) ? mc : 0,
-                    State = states[p.InstanceId]
+                    State = states[p.InstanceId],
+                    Resources = p.Resources, Restarts = p.Restarts, LastRestartUtc = p.LastRestartUtc, LastOomUtc = p.LastOomUtc,
+                    ResourceHistory = rt.Resources.TryGetValue(p.InstanceId, out var points) ? points.ToList() : null,
+                    Alerts = states[p.InstanceId] == "up" ? PodAlerts(p, now) : new List<string>()
                 })
                 .OrderBy(p => p.ClusterName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(p => p.Details.TryGetValue("POD_NAME", out var n) ? n : p.MachineName, StringComparer.OrdinalIgnoreCase)
@@ -304,6 +375,7 @@ public sealed class MonitorService : BackgroundService
             status.Connections = connections.Select(c => new ConnectionStatus
             {
                 ConnectionId = c.Id, Name = c.Name, Target = c.Host + (c.Port.HasValue ? ":" + c.Port : ""), TargetAppId = c.TargetAppId,
+                Tls = c.TlsEnabled(),
                 Cells = rt.Known.Keys
                     .Where(pod => rt.Results.ContainsKey(c.Id + "|" + pod))
                     .Select(pod =>
@@ -318,33 +390,47 @@ public sealed class MonitorService : BackgroundService
         status.PodCount = up;
 
         // step 4: Genel durum.
+        // Notların metni arayüzde seçili dilde üretilir (bkz. StatusNote).
         if (status.Pods.Count == 0)
         {
             status.State = "unknown";
-            status.Message = "Pod bildirimi bekleniyor";
+            status.Notes.Add(new StatusNote("waiting"));
         }
         else if (up == 0)
         {
             status.State = "down";
-            status.Message = $"Hiçbir pod bildirim göndermiyor (son bildirim: {lastReport:HH:mm:ss} UTC)";
+            status.Notes.Add(new StatusNote("noReports", AtUtc: lastReport));
         }
         else
         {
-            var problems = new List<string>();
             var missing = status.Pods.Count(p => p.State == "missing");
-            if (missing > 0) problems.Add($"{missing} pod eksik (üst üste {threshold}+ test aralığı bildirim göndermedi)");
+            if (missing > 0) status.Notes.Add(new StatusNote("missingPods", missing));
             var failedCells = status.Connections.Sum(c => c.Cells.Count(x => x.Fresh && !x.Success));
-            if (failedCells > 0) problems.Add($"{failedCells} bağlantı testi başarısız");
+            if (failedCells > 0) status.Notes.Add(new StatusNote("failedTests", failedCells));
 
-            var notes = new List<string>();
+            // Kaynak ve sertifika uyarıları da uygulamayı "sorunlu" yapar.
+            var alerts = _opt.Alerts;
+            int PodsWith(string alert) => status.Pods.Count(p => p.Alerts.Contains(alert));
+            foreach (var alert in new[] { "memHigh", "restart", "oom", "portsHigh" })
+                if (PodsWith(alert) is var n && n > 0) status.Notes.Add(new StatusNote(alert, n));
+            var expiring = status.Connections
+                .Select(c => c.Cells.Where(x => x.Fresh && x.Tls is { Success: true, NotAfterUtc: not null }).Select(x => x.Tls!.NotAfterUtc!.Value).DefaultIfEmpty(DateTime.MaxValue).Min())
+                .Where(end => end != DateTime.MaxValue && end - now <= TimeSpan.FromDays(alerts.CertificateDays)).ToList();
+            if (expiring.Count > 0) status.Notes.Add(new StatusNote("certExpiring", expiring.Count, expiring.Min()));
+            status.State = status.Notes.Count > 0 ? "degraded" : "healthy";
+
+            // Bilgi notları (durumu değiştirmez).
             var late = status.Pods.Count(p => p.State == "unconfirmed");
-            if (late > 0) notes.Add($"{late} pod'un bildirimi gecikti");
+            if (late > 0) status.Notes.Add(new StatusNote("latePods", late));
+            if (PodsWith("throttled") is var throttled && throttled > 0) status.Notes.Add(new StatusNote("throttled", throttled));
+            var slow = status.Connections.Count(c => c.Cells.Any(x => x.Fresh && x.Slow));
+            if (slow > 0) status.Notes.Add(new StatusNote("slow", slow));
+            var recent = now - TimeSpan.FromMinutes(alerts.RecentMinutes);
+            var ipChanged = status.Connections.Count(c => c.Cells.Any(x => x.AddressesChangedUtc >= recent));
+            if (ipChanged > 0) status.Notes.Add(new StatusNote("ipChanged", ipChanged));
             var builds = status.Pods.Where(p => p.State == "up").Select(p => p.AppVersion + "|" + p.BuildId).Distinct().Count();
-            if (builds > 1) notes.Add($"{builds} farklı sürüm/build çalışıyor");
-            if (connections.Count > 0 && status.Connections.All(c => c.Cells.Count == 0)) notes.Add("ilk test sonuçları bekleniyor");
-
-            status.State = problems.Count > 0 ? "degraded" : "healthy";
-            status.Message = problems.Count + notes.Count == 0 ? null : string.Join("; ", problems.Concat(notes));
+            if (builds > 1) status.Notes.Add(new StatusNote("versions", builds));
+            if (connections.Count > 0 && status.Connections.All(c => c.Cells.Count == 0)) status.Notes.Add(new StatusNote("firstResults"));
         }
 
         // Geçmiş: test aralığında bir nokta.
@@ -365,11 +451,32 @@ public sealed class MonitorService : BackgroundService
     // Yardımcılar
     // ---------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// Canlı bir pod'un kaynak uyarıları (eşikler: Monitor:Alerts):
+    /// memHigh (bellek limite yakın), throttled (CPU limiti yüzünden yavaşlatılıyor), restart / oom (son RecentMinutes içinde),
+    /// portsHigh (TCP soketleri yerel port aralığını dolduruyor).
+    /// </summary>
+    private List<string> PodAlerts(PodStatus p, DateTime now)
+    {
+        var a = _opt.Alerts;
+        var list = new List<string>();
+        var r = p.Resources;
+        if (r is { MemoryLimitBytes: > 0, MemoryBytes: { } mem } && 100.0 * mem / r.MemoryLimitBytes.Value >= a.MemoryPercent) list.Add("memHigh");
+        if (r?.CpuThrottledPercent >= a.CpuThrottledPercent) list.Add("throttled");
+        if (r is { EphemeralPorts: > 0, TcpEstablished: { } est, TcpTimeWait: { } tw } && 100.0 * (est + tw) / r.EphemeralPorts.Value >= a.PortsPercent)
+            list.Add("portsHigh");
+        var recent = now - TimeSpan.FromMinutes(a.RecentMinutes);
+        if (p.LastRestartUtc >= recent) list.Add("restart");
+        if (p.LastOomUtc >= recent) list.Add("oom");
+        return list;
+    }
+
     private static void Forget(AppRuntime rt, string podId)
     {
         rt.Known.Remove(podId);
         rt.Missed.Remove(podId);
         rt.PollSeconds.Remove(podId);
+        rt.Resources.Remove(podId);
     }
 
     /// <summary>
@@ -380,26 +487,64 @@ public sealed class MonitorService : BackgroundService
     {
         var key = connId + "|" + cell.InstanceId;
         rt.Results.TryGetValue(key, out var prev);
+
+        // Ad çözümlemesi daha önce hiç görülmemiş bir IP döndürdü mü (DNS kaydı değişti, failover, yeni yük dengeleyici...).
+        // Round-robin DNS (her sorguda havuzdan farklı IP, ör. github.com) uyarı üretmesin diye görülen IP'ler hatırlanır ve
+        // ilk 5 ölçüm yalnızca öğrenmek için kullanılır.
+        var addresses = cell.IpResults.Select(r => r.Address).OrderBy(a => a, StringComparer.Ordinal).ToList();
+        var previousAddresses = prev?.IpResults.Select(r => r.Address).OrderBy(a => a, StringComparer.Ordinal).ToList();
+        var known = new HashSet<string>(prev?.KnownAddresses ?? new List<string>(), StringComparer.Ordinal);
+        var samples = (prev?.Samples ?? 0) + 1;
+        var changed = samples > 5 && addresses.Any(a => !known.Contains(a));
+        known.UnionWith(addresses);
+
+        // Gecikme: son 20 başarılı bağlantının süresi. Son 3 ölçümün ortalaması, öncekilerin ortancasının 3 katını (ve en az
+        // 50 ms fazlasını) geçerse "yavaş" sayılır. Hedef kopmadan önce çoğu zaman yavaşlar.
+        var recent = (prev?.RecentMs ?? new List<long>()).ToList();
+        if (cell.TcpSuccess) recent.Add(cell.ElapsedMs);
+        if (recent.Count > 20) recent.RemoveRange(0, recent.Count - 20);
+        long? baseline = null;
+        var slow = false;
+        if (recent.Count >= 8)
+        {
+            var older = recent.Take(recent.Count - 3).OrderBy(x => x).ToList();
+            baseline = older[older.Count / 2];
+            var current = recent.Skip(recent.Count - 3).Average();
+            slow = cell.TcpSuccess && current >= baseline.Value * 3 && current - baseline.Value >= 50;
+        }
+
         rt.Results[key] = cell with
         {
             LastSuccessUtc = cell.Success ? cell.CheckedAtUtc : prev?.LastSuccessUtc,
             FailingSinceUtc = cell.Success ? null
                 : prev is { Success: false } ? prev.FailingSinceUtc ?? prev.CheckedAtUtc
-                : cell.CheckedAtUtc
+                : cell.CheckedAtUtc,
+            AddressesChangedUtc = changed ? cell.CheckedAtUtc : prev?.AddressesChangedUtc,
+            PreviousAddresses = changed ? previousAddresses : prev?.PreviousAddresses,
+            KnownAddresses = known.Count > 64 ? addresses : known.ToList(),
+            Samples = samples,
+            RecentMs = recent,
+            BaselineMs = baseline,
+            Slow = slow
         };
     }
 
-    // Telnet raporunu (isim üzerinden bağlantı + IP bazında sonuçlar) hücreye çevirir.
-    private static PodConnectionCell FromTcp(ProbeReport report, string instanceId, DateTime checkedAtUtc)
+    // Telnet raporunu (isim üzerinden bağlantı + IP bazında sonuçlar) ve varsa TLS sonucunu hücreye çevirir.
+    // Hücre ancak TCP bağlantısı kurulduysa ve (TLS kontrolü varsa) sertifika geçerliyse başarılıdır.
+    private static PodConnectionCell FromTcp(ProbeReport report, TlsReport? tls, string instanceId, DateTime checkedAtUtc)
     {
         var host = report.HostnameAttempts.FirstOrDefault();
+        var tcpOk = host?.Success ?? false;
         return new PodConnectionCell
         {
             InstanceId = instanceId,
-            Success = host?.Success ?? false,
+            TcpSuccess = tcpOk,
+            Success = tcpOk && (tls == null || tls.Success),
             ElapsedMs = host?.ElapsedMs ?? 0,
             ReachedAddress = host?.RemoteAddress,
-            Error = host?.Error ?? report.ResolveError,
+            Error = host?.Error ?? report.ResolveError ?? (tls is { Success: false } ? "TLS: " + tls.Error : null),
+            DnsMs = report.DnsMs,
+            Tls = tls,
             CheckedAtUtc = checkedAtUtc,
             IpResults = report.ResolvedAddresses
                 .Select(a => new IpResult(a.Address, a.Succeeded > 0, a.Results.FirstOrDefault()?.ElapsedMs ?? 0, a.Results.FirstOrDefault()?.Error))

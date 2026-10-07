@@ -40,6 +40,8 @@ namespace ConnectivityProbe
         public string? ExecutedByInstanceId { get; set; }
         public string? ExecutedByMachineName { get; set; }
         public string? ResolveError { get; set; }
+        /// <summary>DNS çözümleme süresi (ms). Hedef IP olarak verildiyse null.</summary>
+        public long? DnsMs { get; set; }
         /// <summary>
         /// true: istenen denemelerin hepsi yapılmadan süre sınırına (MaxRequestDuration) ulaşıldı, sonuç eksik.
         /// </summary>
@@ -203,6 +205,7 @@ namespace ConnectivityProbe
 
             using (var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
+                var sw = Stopwatch.StartNew();
                 try
                 {
                     var dns = Dns.GetHostAddressesAsync(host);
@@ -216,7 +219,9 @@ namespace ConnectivityProbe
                     }
 
                     timer.Cancel();
-                    return (await dns.ConfigureAwait(false)).Distinct().Take(maxAddresses).ToArray();
+                    var addresses = (await dns.ConfigureAwait(false)).Distinct().Take(maxAddresses).ToArray();
+                    report.DnsMs = sw.ElapsedMilliseconds;
+                    return addresses;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {

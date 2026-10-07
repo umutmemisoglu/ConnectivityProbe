@@ -20,15 +20,13 @@ public sealed class TeamDefinition
 }
 
 /// <summary>
-/// Havuzdaki bir hedef (ör. veritabanı sunucusu, harici API). Uygulamalara sürükle-bırak ile atanır; uygulamanın her pod'u
-/// bu hedefe kendi içinden TCP bağlantısı açarak test eder.
-/// TeamId doluysa o ekibin havuzundadır ve yalnızca o ekibin uygulamalarına atanabilir; boşsa ortak havuzdadır.
+/// Havuzdaki bir hedef (ör. veritabanı sunucusu, harici API). Havuz tektir, birim ve ekiplerden bağımsızdır: her bağlantı
+/// her uygulamaya sürükle-bırak ile atanabilir. Uygulamanın her pod'u bu hedefe kendi içinden bağlanarak test eder.
+/// (2.0'daki ekip havuzları kalktı; eski dosyadaki "teamId" alanı okunurken yok sayılır, bağlantılar tek havuzda toplanır.)
 /// </summary>
 public sealed class ConnectionDefinition
 {
     public string Id { get; set; } = "";
-    /// <summary>Sahip ekip; null = ortak havuz.</summary>
-    public string? TeamId { get; set; }
     public string Name { get; set; } = "";
     /// <summary>Sunucu adı, IP veya tam URL (https://...). URL ise port boş bırakılabilir.</summary>
     public string Host { get; set; } = "";
@@ -38,6 +36,21 @@ public sealed class ConnectionDefinition
     /// gösterilir (ör. "hedef: Orders API · 3 pod · Sağlıklı").
     /// </summary>
     public string? TargetAppId { get; set; }
+    /// <summary>
+    /// TLS / sertifika kontrolü: "auto" (varsayılan; https:// ve 443, 8443, 636, 993, 995, 465, 5671 portlarında), "on" veya "off".
+    /// </summary>
+    public string? TlsCheck { get; set; }
+
+    private static readonly int[] TlsPorts = { 443, 8443, 636, 993, 995, 465, 5671 };
+
+    /// <summary>Pod'lar bu bağlantıda TCP'ye ek olarak TLS el sıkışması ve sertifika kontrolü yapsın mı.</summary>
+    public bool TlsEnabled()
+    {
+        if (TlsCheck == "on") return true;
+        if (TlsCheck == "off") return false;
+        return ProbeTarget.TryParse(Host, Port?.ToString(), out _, out var port, out var scheme, out _)
+            && (string.Equals(scheme, "https", StringComparison.OrdinalIgnoreCase) || TlsPorts.Contains(port));
+    }
 }
 
 /// <summary>
@@ -60,11 +73,13 @@ public sealed class AppDefinition
 
 /// <summary>
 /// Pod'ların otomatik tespit edilen cluster'ı. Anahtar: Kubernetes cluster sertifikasının parmak izi ("k8s:...") ya da
-/// Kubernetes dışında bildirimin geldiği ağ adresi ("net:..."). Ad ilk görüldüğünde "Cluster N" olur, Monitor'de değiştirilebilir.
+/// Kubernetes dışında pod'un ağı ("net:10.80.0.0/16"). Ad boşsa pod'ların ağından türetilir (ör. "10.42.0.0/16");
+/// Monitor'de elle ad verilebilir.
 /// </summary>
 public sealed class ClusterDefinition
 {
     public string Key { get; set; } = "";
+    /// <summary>Elle verilen ad; boş = otomatik (pod ağı).</summary>
     public string Name { get; set; } = "";
 }
 
@@ -86,10 +101,11 @@ public sealed record AppView(string Id, string? TeamId, string Name, string AppK
     public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.AppKey, a.RegisteredAtUtc, a.ConnectionIds.ToList());
 }
 
-/// <summary>Bağlantı tanımının arayüze giden hali. TeamId null = ortak havuz.</summary>
-public sealed record ConnectionView(string Id, string? TeamId, string Name, string Host, int? Port, string? TargetAppId)
+/// <summary>Bağlantı tanımının arayüze giden hali.</summary>
+public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls)
 {
-    public static ConnectionView From(ConnectionDefinition c) => new(c.Id, c.TeamId, c.Name, c.Host, c.Port, c.TargetAppId);
+    public static ConnectionView From(ConnectionDefinition c) =>
+        new(c.Id, c.Name, c.Host, c.Port, c.TargetAppId, c.TlsCheck ?? "auto", c.TlsEnabled());
 }
 
 public sealed record DefinitionsView(
@@ -102,9 +118,9 @@ public sealed record TeamInput(string? Name, string? UnitId);
 /// <summary>Uygulamada değiştirilebilenler: ad ve ekip (anahtar uygulamanın kimliğidir, değişmez).</summary>
 public sealed record AppInput(string? Name, string? TeamId = null);
 
-/// <param name="TeamId">Sahip ekip; null = ortak havuz.</param>
 /// <param name="TargetAppId">Hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği (isteğe bağlı).</param>
-public sealed record ConnectionInput(string? Name, string? Host, int? Port, string? TeamId = null, string? TargetAppId = null);
+/// <param name="TlsCheck">auto | on | off (boş = auto).</param>
+public sealed record ConnectionInput(string? Name, string? Host, int? Port, string? TargetAppId = null, string? TlsCheck = null);
 
 public sealed record ClusterInput(string? Name);
 
@@ -120,7 +136,8 @@ public sealed record LoginInput(string? Username, string? Password);
 public sealed record AgentAssignment(
     string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, List<AgentConnection> Connections);
 
-public sealed record AgentConnection(string Id, string Name, string Host, int? Port);
+/// <param name="Tls">TCP'ye ek olarak TLS el sıkışması ve sertifika kontrolü yapılsın mı.</param>
+public sealed record AgentConnection(string Id, string Name, string Host, int? Port, bool Tls);
 
 public sealed record AgentGoodbye(string? InstanceId);
 
@@ -134,13 +151,24 @@ public sealed class MonitorSnapshot
     public int IntervalSeconds { get; set; }
     /// <summary>Bir pod'un "eksik" sayılması için bildirim göndermeden geçmesi gereken test aralığı sayısı.</summary>
     public int MissingAfterCycles { get; set; }
+    /// <summary>Sertifika bitişine kaç gün kala uyarı verildiği (arayüz renklendirmesi için).</summary>
+    public int CertificateDays { get; set; }
     public DateTime? LastRunUtc { get; set; }
     public List<AppStatus> Apps { get; set; } = new();
     /// <summary>Görülen cluster'lar (ad ve pod sayısıyla).</summary>
     public List<ClusterView> Clusters { get; set; } = new();
 }
 
-public sealed record ClusterView(string Key, string Name, int Pods, int Apps);
+/// <param name="Name">Görünen ad: elle verilen ad ya da pod'ların ağı (ör. "10.42.0.0/16").</param>
+/// <param name="Networks">Bu cluster'daki pod'ların ağları.</param>
+/// <param name="Custom">Ad elle verildiyse true.</param>
+public sealed record ClusterView(string Key, string Name, List<string> Networks, bool Custom, int Pods, int Apps);
+
+/// <summary>
+/// Uygulama durumunu açıklayan not. Metin arayüzde seçili dilde üretilir.
+/// Kodlar: waiting, noReports (AtUtc), missingPods (Count), failedTests (Count), latePods (Count), versions (Count), firstResults.
+/// </summary>
+public sealed record StatusNote(string Code, int Count = 0, DateTime? AtUtc = null);
 
 public sealed class AppStatus
 {
@@ -149,7 +177,8 @@ public sealed class AppStatus
     public string AppKey { get; set; } = "";
     /// <summary>healthy | degraded | down | unknown</summary>
     public string State { get; set; } = "unknown";
-    public string? Message { get; set; }
+    /// <summary>Durumun nedenleri (önce sorunlar, sonra bilgi notları).</summary>
+    public List<StatusNote> Notes { get; set; } = new();
     public DateTime? CheckedAtUtc { get; set; }
     /// <summary>Şu an bildirim gönderen (canlı) pod sayısı. Pod'lar kendini bildirdiği için kesindir.</summary>
     public int PodCount { get; set; }
@@ -163,6 +192,9 @@ public sealed class PodStatus
     public string InstanceId { get; set; } = "";
     public string MachineName { get; set; } = "";
     public List<string> Addresses { get; set; } = new();
+    /// <summary>Pod'un asıl IP adresi (Monitor'e giderken kullandığı) ve bu adresin ağı (ör. 10.42.0.0/16).</summary>
+    public string? PrimaryAddress { get; set; }
+    public string? Network { get; set; }
     public DateTime? StartedAtUtc { get; set; }
     /// <summary>Pod adı, node, ortam gibi ek bilgiler (pod'un bildirdiği seçili ortam değişkenleri).</summary>
     public Dictionary<string, string> Details { get; set; } = new();
@@ -187,7 +219,22 @@ public sealed class PodStatus
     public string? Namespace { get; set; }
     /// <summary>Bildirimin geldiği ağ adresi.</summary>
     public string? SourceIp { get; set; }
+
+    /// <summary>Son kaynak ölçümü (CPU, bellek, limitler, thread'ler, TCP soketleri).</summary>
+    public ResourceSample? Resources { get; set; }
+    /// <summary>Son ölçümlerin kısa geçmişi (grafikler için; diske yazılmaz).</summary>
+    public List<ResourcePoint>? ResourceHistory { get; set; }
+    /// <summary>Monitor'ün gördüğü yeniden başlama sayısı (aynı pod, yeni süreç) ve son yeniden başlama.</summary>
+    public int Restarts { get; set; }
+    public DateTime? LastRestartUtc { get; set; }
+    /// <summary>Container'da OOM kill sayısının son arttığı an.</summary>
+    public DateTime? LastOomUtc { get; set; }
+    /// <summary>Pod uyarıları: memHigh, throttled, restart, oom, portsHigh (arayüz seçili dilde gösterir).</summary>
+    public List<string> Alerts { get; set; } = new();
 }
+
+/// <summary>Grafikler için kısa kaynak geçmişi noktası.</summary>
+public sealed record ResourcePoint(DateTime AtUtc, double? CpuCores, long MemoryBytes, double? ThrottledPercent, long? NetRxBytes, long? NetTxBytes);
 
 public sealed class ConnectionStatus
 {
@@ -196,6 +243,8 @@ public sealed class ConnectionStatus
     public string Target { get; set; } = "";
     /// <summary>Hedef de Monitor'e kayıtlı bir uygulamaysa onun kimliği.</summary>
     public string? TargetAppId { get; set; }
+    /// <summary>Bu bağlantıda TLS / sertifika kontrolü yapılıyor mu.</summary>
+    public bool Tls { get; set; }
     public List<PodConnectionCell> Cells { get; set; } = new();
 }
 
@@ -219,6 +268,26 @@ public sealed record PodConnectionCell
     public DateTime? LastSuccessUtc { get; init; }
     /// <summary>Başarısızsa: kesintisiz olarak ne zamandan beri başarısız.</summary>
     public DateTime? FailingSinceUtc { get; init; }
+
+    /// <summary>TCP bağlantısının sonucu (Success, TLS kontrolü varsa onu da kapsar).</summary>
+    public bool TcpSuccess { get; init; }
+    /// <summary>DNS çözümleme süresi (ms).</summary>
+    public long? DnsMs { get; init; }
+    /// <summary>TLS el sıkışması ve sertifika (bağlantıda TLS kontrolü açıksa).</summary>
+    public TlsReport? Tls { get; init; }
+
+    /// <summary>Ad çözümlemesinin döndüğü IP'lerin son değiştiği an ve önceki IP'ler.</summary>
+    public DateTime? AddressesChangedUtc { get; init; }
+    public List<string>? PreviousAddresses { get; init; }
+    /// <summary>Bu bağlantıda şimdiye kadar görülen IP'ler (round-robin DNS'te sahte "IP değişti" uyarısını önler) ve ölçüm sayısı.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public List<string> KnownAddresses { get; init; } = new();
+    [System.Text.Json.Serialization.JsonIgnore] public int Samples { get; init; }
+
+    /// <summary>Son başarılı bağlantı süreleri (ms; en fazla 20) ve olağan süre (ortanca).</summary>
+    public List<long> RecentMs { get; init; } = new();
+    public long? BaselineMs { get; init; }
+    /// <summary>Son ölçümler olağan sürenin 3 katından yavaş.</summary>
+    public bool Slow { get; init; }
 }
 
 public sealed record HistoryPoint(DateTime AtUtc, string State, int PodCount);
