@@ -1076,6 +1076,10 @@ function alertBadges(p) {
   }).join('');
 }
 
+// Açıklama bölümünün açık/kapalı durumu: sayfa her turda yeniden çizildiği için hatırlanır.
+let resLegendOpen = false;
+document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('res-legend')) resLegendOpen = e.target.open; }, true);
+
 function resourcesHtml(s) {
   const groups = groupByCluster((s.pods || []).filter((p) => p.state !== 'missing'));
   const pods = groups.flatMap((g) => g.pods);
@@ -1094,30 +1098,40 @@ function resourcesHtml(s) {
     const ports = portPercent(p);
     const rate = netRate(p);
     const has = (a) => p.alerts?.includes(a);
+    // Bellek yüzdesinin yorumu (değerin üzerine gelince): rahat / takip edilmeli / limite çok yakın.
+    const memNote = memPct == null ? '' : memPct >= 90 ? t('res.memHighTip', { n: memPct }) : memPct >= 60 ? t('res.memWatch', { n: memPct }) : t('res.memOk', { n: memPct });
+    const tip = (...texts) => esc(texts.filter(Boolean).join('\n\n'));
     const cpuLine = `${esc(t('res.cores', { n: fmtNum(r.cpuCores) }))} <span class="muted">/ ${esc(r.cpuLimitCores ? t('res.limit', { n: fmtNum(r.cpuLimitCores) }) : t('res.noLimit'))}</span>`;
     return `${groupRow}<tr>
       <td class="rowhead"><span class="name">${esc(podName(p))}</span><span class="target">${esc(p.primaryAddress || '')} · ${shortId(p.instanceId)}</span>${alertBadges(p)}</td>
-      <td><div class="res-val">${cpuLine}</div>
+      <td title="${tip(t('res.cpuTip'))}"><div class="res-val">${cpuLine}</div>
         ${r.cpuThrottledPercent != null ? `<div class="res-sub ${has('throttled') ? 'warn-t' : ''}">${esc(t('res.throttle', { n: fmtNum(r.cpuThrottledPercent, 1) }))}</div>` : ''}
         ${sparkline(hist.map((h) => h.cpuCores), r.cpuLimitCores, 'cpu')}</td>
-      <td><div class="res-val ${has('memHigh') ? 'bad' : ''}">${esc(fmtBytes(mem))}${r.memoryLimitBytes ? ` <span class="muted">/ ${esc(fmtBytes(r.memoryLimitBytes))}</span> <b>${pctText(memPct)}</b>` : ''}</div>
-        <div class="res-sub">${esc(t('res.heap', { n: fmtBytes(r.gcHeapBytes) }))} · ${esc(t('res.gc', { a: r.gen0Collections, b: r.gen1Collections, c: r.gen2Collections }))}</div>
+      <td title="${tip(memNote, t('res.memTip'))}"><div class="res-val ${has('memHigh') ? 'bad' : ''}">${esc(fmtBytes(mem))}${r.memoryLimitBytes ? ` <span class="muted">/ ${esc(fmtBytes(r.memoryLimitBytes))}</span> <b>${pctText(memPct)}</b>` : ''}</div>
+        <div class="res-sub"><span title="${tip(t('res.heapTip'))}">${esc(t('res.heap', { n: fmtBytes(r.gcHeapBytes) }))}</span> · <span title="${tip(t('res.gcTip'))}">${esc(t('res.gc', { a: r.gen0Collections, b: r.gen1Collections, c: r.gen2Collections }))}</span></div>
         ${sparkline(hist.map((h) => h.memoryBytes), r.memoryLimitBytes, has('memHigh') ? 'bad' : 'mem')}</td>
-      <td><div class="res-val">${r.threads}</div><div class="res-sub">${esc(t('res.pool', { busy: r.threadPoolBusy }))}${r.handles != null ? ` · handle ${r.handles}` : ''}</div></td>
-      <td>${r.tcpTotal != null ? `<div class="res-val ${has('portsHigh') ? 'bad' : ''}">${r.tcpTotal}</div>
+      <td title="${tip(t('res.threadsTip'))}"><div class="res-val">${r.threads}</div><div class="res-sub">${esc(t('res.pool', { busy: r.threadPoolBusy }))}${r.handles != null ? ` · handle ${r.handles}` : ''}</div></td>
+      <td title="${tip(t('res.tcpTip'))}">${r.tcpTotal != null ? `<div class="res-val ${has('portsHigh') ? 'bad' : ''}">${r.tcpTotal}</div>
         <div class="res-sub">${esc(t('res.est', { n: r.tcpEstablished }))} · ${esc(t('res.tw', { n: r.tcpTimeWait }))}${ports != null ? ` · ${esc(t('res.ports', { n: ports }))}` : ''}</div>` : '<span class="muted">–</span>'}</td>
-      <td>${rate ? `<div class="res-val">↓ ${esc(fmtBytes(rate.rx))}/s</div><div class="res-sub">↑ ${esc(fmtBytes(rate.tx))}/s</div>` : '<span class="muted">–</span>'}</td>
-      <td>${p.restarts ? `<span class="${has('restart') ? 'warn-t' : ''}">${esc(t('res.restartsVal', { n: p.restarts, t: dateTimeOf(p.lastRestartUtc) }))}</span>` : '<span class="muted">0</span>'}</td>
-      <td class="muted">${r.processorCount} CPU</td>
+      <td title="${tip(t('res.netTip'))}">${rate ? `<div class="res-val">↓ ${esc(fmtBytes(rate.rx))}/s</div><div class="res-sub">↑ ${esc(fmtBytes(rate.tx))}/s</div>` : '<span class="muted">–</span>'}</td>
+      <td title="${tip(t('res.restartsTip'))}">${p.restarts ? `<span class="${has('restart') ? 'warn-t' : ''}">${esc(t('res.restartsVal', { n: p.restarts, t: dateTimeOf(p.lastRestartUtc) }))}</span>` : '<span class="muted">0</span>'}</td>
+      <td class="muted" title="${tip(t('res.cpusTip'))}">${r.processorCount} CPU</td>
     </tr>`;
   }).join('');
+
+  // Başlıktaki ⓘ'nin üzerine gelince açıklama; aynı açıklamalar tablonun altında açılır bir bölümde de var (dokunmatik ekranlar için).
+  const head = (label, tipKey) => `<th title="${esc(t(tipKey))}">${esc(label)} <span class="info" aria-hidden="true">ⓘ</span></th>`;
+  const legend = [['res.cpu', 'res.cpuTip'], ['res.memory', 'res.memTip'], ['GC heap', 'res.heapTip'], ['GC', 'res.gcTip'],
+    ['res.threads', 'res.threadsTip'], ['res.tcp', 'res.tcpTip'], ['res.net', 'res.netTip'], ['res.restarts', 'res.restartsTip']]
+    .map(([label, tipKey]) => `<dt>${esc(label.startsWith('res.') ? t(label) : label)}</dt><dd>${esc(t(tipKey))}</dd>`).join('');
 
   return `<h3 class="m-sec">${esc(t('res.title'))}</h3>
     <p class="hint">${esc(t('res.help'))}</p>
     <div class="matrix-wrap"><table class="matrix res-table">
-      <thead><tr><th>${esc(t('res.pod'))}</th><th>${esc(t('res.cpu'))}</th><th>${esc(t('res.memory'))}</th><th>${esc(t('res.threads'))}</th>
-        <th>${esc(t('res.tcp'))}</th><th>${esc(t('res.net'))}</th><th>${esc(t('res.restarts'))}</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
+      <thead><tr><th>${esc(t('res.pod'))}</th>${head(t('res.cpu'), 'res.cpuTip')}${head(t('res.memory'), 'res.memTip')}${head(t('res.threads'), 'res.threadsTip')}
+        ${head(t('res.tcp'), 'res.tcpTip')}${head(t('res.net'), 'res.netTip')}${head(t('res.restarts'), 'res.restartsTip')}<th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <details class="res-legend" ${resLegendOpen ? "open" : ""}><summary>${esc(t('res.legend'))}</summary><dl>${legend}</dl><p class="hint">${esc(t('res.limitsNote'))}</p></details>`;
 }
 
 // Pod listesi ağa (cluster) göre gruplanır (Netflix'in bölüm listesi gibi):

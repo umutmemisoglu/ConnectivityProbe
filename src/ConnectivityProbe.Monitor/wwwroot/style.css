@@ -521,3 +521,13 @@ a.logo { text-decoration: none; }
 
 /* Bağlantı formunda aynı adres uyarısı */
 .dlg-warn { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); font-size: 13px; line-height: 1.45; }
+
+/* Kaynaklar: açıklama işaretleri ve tablo altındaki açıklama bölümü */
+.res-table th .info { color: var(--muted); font-weight: 400; cursor: help; }
+.res-table td[title], .res-table td span[title] { cursor: help; }
+.res-legend { margin: 10px 0 4px; }
+.res-legend summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.res-legend dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 10px 0 6px; font-size: 13px; line-height: 1.5; }
+.res-legend dt { font-weight: 700; }
+.res-legend dd { margin: 0; color: var(--text-2); }
+@media (max-width: 640px) { .res-legend dl { grid-template-columns: 1fr; } .res-legend dd { margin-bottom: 6px; } }
