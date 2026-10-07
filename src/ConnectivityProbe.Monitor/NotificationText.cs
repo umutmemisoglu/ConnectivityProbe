@@ -137,18 +137,18 @@ public static class NotificationText
 /// <summary>
 /// Bir kişiye giden mesajın adresi ve zarfı:
 /// <list type="bullet">
-/// <item>Merkezi iş akışı (microsoft / email modu): <c>{ recipient, card }</c> merkezi adrese; iş akışı kartı alıcıya Flow bot ile
+/// <item>Merkezi iş akışı (Ayarlar → Teams bildirimleri): <c>{ recipient, card }</c> merkezi adrese; iş akışı kartı alıcıya Flow bot ile
 /// özel mesaj olarak gönderir (Power Automate: "Post card in a chat or channel", Recipient = triggerBody()?['recipient'],
 /// Adaptive Card = string(triggerBody()?['card'])).</item>
-/// <item>Kişinin kendi iş akışı (webhook modu): Teams'in "Send webhook alerts to a chat" şablonunun beklediği mesaj zarfı.</item>
+/// <item>Kişinin kendi iş akışı (önceki sürümlerde kaydolmuş kişiler; merkezi iş akışı yoksa): Teams'in "Send webhook alerts to a chat" şablonunun beklediği mesaj zarfı.</item>
 /// </list>
 /// </summary>
 public static class Delivery
 {
-    public static (string Url, object Payload)? For(PersonDefinition person, NotificationOptions options, Dictionary<string, object?> card)
+    public static (string Url, object Payload)? For(PersonDefinition person, string? workflowUrl, Dictionary<string, object?> card)
     {
-        if (options.Central && !string.IsNullOrWhiteSpace(person.Email))
-            return (options.WorkflowUrl!.Trim(), new { recipient = person.Email, card });
+        if (!string.IsNullOrWhiteSpace(workflowUrl) && !string.IsNullOrWhiteSpace(person.Email))
+            return (workflowUrl.Trim(), new { recipient = person.Email, card });
         if (!string.IsNullOrWhiteSpace(person.WebhookUrl))
             return (person.WebhookUrl, new
             {

@@ -119,11 +119,13 @@ function groupByCluster(pods) {
 // Sekmeler, dil ve üst çubuk
 // ---------------------------------------------------------------------------------------------
 function setTab(name) {
-  if (name !== 'defs') name = 'monitor';
+  if (name !== 'defs' && name !== 'settings') name = 'monitor';
   tab = name;
   save('tab', name);
   $('#tab-monitor').hidden = name !== 'monitor';
   $('#tab-defs').hidden = name !== 'defs';
+  $('#tab-settings').hidden = name !== 'settings';
+  if (name === 'settings') renderSettings();
   $('#navTools').hidden = name !== 'monitor'; // arama ve filtre yalnızca monitörde anlamlı
   window.scrollTo(0, 0);
   $('#topbar').classList.toggle('scrolled', name !== 'monitor'); // Tanımlar'da billboard yok: menü baştan koyu
@@ -136,6 +138,7 @@ function changeLang(lang) {
   renderMe();
   lastSnapJson = '';
   renderDefs();
+  if (tab === 'settings' && !detailAppId) renderSettings();
   if (snap) { if (detailAppId) renderDetail(); else renderMonitor(); }
   renderMeta();
 }
@@ -404,11 +407,11 @@ function renderApps() {
 // ---------------------------------------------------------------------------------------------
 // Teams bildirimleri
 //   - Uygulamanın bildirim kuralları kişiden bağımsızdır (Tanımlar'daki checkbox'lar); bildirim alan herkes için geçerlidir.
-//   - "Bana haber ver": kişi ilk seferde adını ve Teams Workflows adresini bir kez kaydeder (deneme mesajı gider); tarayıcı
-//     kişiyi hatırlar, sonraki uygulamalarda tek tık.
+//   - Tek seferlik kurulum (Entra ID kaydı + merkezi iş akışı) Ayarlar sekmesindedir; kişiye hiçbir şey sorulmaz.
+//   - "Bana haber ver": Microsoft (Teams) hesabıyla giriş, dönüşte abonelik otomatik; giriş yapılmışsa tek tık.
 // ---------------------------------------------------------------------------------------------
-let me = load('person', null);                 // bu tarayıcıdaki kişi: { id, name } (Microsoft modunda sunucudaki oturumdan)
-let notifyMode = 'webhook';                    // microsoft | email | webhook (Monitor ayarlarından; bkz. /api/notify/me)
+let me = null;                                 // Microsoft hesabıyla giriş yapmış kişi: { id, name } (sunucudaki oturumdan)
+let notifyReady = false;                       // tek seferlik kurulum tamam mı (bkz. /api/notify/me)
 const notifyOpen = new Set();                  // açık bildirim bölümleri (ekran her güncellendiğinde açık kalsın)
 
 const subscribersOf = (appId) => {
@@ -465,44 +468,33 @@ async function saveNotifyRules(details) {
   } catch (err) { alert(err.message); await loadDefs(); }
 }
 
-// Kişi formu: ilk kayıt (ad + adres zorunlu) ya da profil düzenleme (adres boşsa değişmez).
-function personForm(existing, onDone) {
-  const email = notifyMode === 'email';
-  const fields = [
-    { name: 'name', label: t('nt.name'), placeholder: t('nt.namePh') },
-    email
-      ? { name: 'email', label: t('nt.email'), placeholder: t('nt.emailPh'), hint: t('nt.emailHint') + (existing ? ' ' + t('nt.urlKeep') : '') }
-      : { name: 'webhookUrl', label: t('nt.url'), placeholder: t('nt.urlPh'), hint: t('nt.urlHint') + (existing ? ' ' + t('nt.urlKeep') : '') },
-  ];
-  openForm(existing ? t('nt.profileTitle') : t('nt.regTitle'), fields, { name: existing?.name ?? '' }, async (v) => {
-    const body = { name: v.name, webhookUrl: v.webhookUrl, email: v.email, lang: LANG };
-    const person = existing ? await api('PUT', '/api/people/' + existing.id, body) : await api('POST', '/api/people', body);
-    me = { id: person.id, name: person.name };
-    save('person', me);
-    renderMe();
-    if (onDone) await onDone();
-    else await loadDefs();
-  }, existing ? '' : t(email ? 'nt.regIntroEmail' : 'nt.regIntro'));
+// Microsoft giriş sayfasına gider; dönüşte sunucu kişiyi bu uygulamaya abone eder ve bu sayfaya geri gönderir.
+const signInAndSubscribe = (appId) => {
+  location.href = '/auth/microsoft?app=' + encodeURIComponent(appId) + '&returnUrl=' + encodeURIComponent(location.pathname + location.search);
+};
+
+// Ayarlar sekmesini açar (detay sayfasından da: ana sayfaya Ayarlar seçili döner).
+function gotoSettings() {
+  if (detailAppId) { save('tab', 'settings'); location.href = '/'; } else setTab('settings');
 }
 
-// "Bana haber ver": tanınan kişi tek tıkla eklenir; tanınmıyorsa önce bir kez kayıt.
+// "Bana haber ver":
+//   kurulum yapılmamış → önce Ayarlar'daki tek seferlik kurulum
+//   giriş yapılmamış   → Microsoft (Teams) giriş sayfası, dönüşte otomatik abonelik
+//   giriş yapılmış     → tek tık
 async function subscribe(appId) {
-  const add = async () => {
+  if (!notifyReady) {
+    if (confirm(t('nt.notReady'))) gotoSettings();
+    return;
+  }
+  if (!me) { signInAndSubscribe(appId); return; }
+  try {
     await api('PUT', `/api/apps/${appId}/subscribers/${me.id}`);
     await loadDefs();
     if (detailAppId) renderDetail();
-  };
-  if (!me && notifyMode === 'microsoft') {
-    location.href = '/auth/microsoft?app=' + encodeURIComponent(appId) + '&returnUrl=' + encodeURIComponent(location.pathname + location.search);
-    return;
-  }
-  if (!me) { personForm(null, add); return; }
-  try { await add(); }
-  catch (err) {
-    // Kişi Monitor'den silinmiş: yeniden kayıt (Microsoft modunda yeniden giriş).
-    me = null; save('person', null); renderMe();
-    if (notifyMode === 'microsoft') location.href = '/auth/microsoft?app=' + encodeURIComponent(appId) + '&returnUrl=' + encodeURIComponent(location.pathname + location.search);
-    else personForm(null, add);
+  } catch {
+    // Kişi Monitor'den silinmiş: yeniden giriş (kişi yeniden eklenir).
+    signInAndSubscribe(appId);
   }
 }
 
@@ -513,12 +505,105 @@ async function unsubscribe(appId) {
   if (detailAppId) renderDetail();
 }
 
-// Üst menüde kişinin adı (profil); tıklayınca ad / Teams adresi değiştirilebilir.
+// Üst menüde kişinin adı; tıklayınca bu tarayıcıdaki Microsoft oturumu kapatılabilir.
 function renderMe() {
   const b = $('#meBtn');
   b.hidden = !me;
   if (me) { b.textContent = t('nt.me', { name: me.name }); b.title = t('nt.meTitle'); }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Ayarlar → Teams bildirimleri (tek seferlik kurulum)
+// ---------------------------------------------------------------------------------------------
+const statusChip = (ok, label) => `<span class="st-chip ${ok ? 'ok' : 'missing'}">${ok ? '✓' : '✗'} ${esc(label)}</span>`;
+
+async function renderSettings() {
+  const panel = $('#settingsPanel');
+  let s;
+  try { s = await api('GET', '/api/settings/notifications'); }
+  catch (err) { panel.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+  notifyReady = s.ready;
+  panel.innerHTML = `
+    <div class="panel-head"><h2>${esc(t('set.notifyTitle'))}</h2>
+      <span class="st-chip big ${s.ready ? 'ok' : 'missing'}">${esc(s.ready ? t('set.ready') : t('set.notReady'))}</span></div>
+    <div class="set-intro">${t('set.intro')}</div>
+
+    <form id="settingsForm" autocomplete="off">
+      <section class="set-step">
+        <h3>1. ${esc(t('set.signInTitle'))} ${statusChip(s.signInConfigured, s.signInConfigured ? t('set.configured') : t('set.missing'))}</h3>
+        <details class="set-guide"><summary>${esc(t('set.howTo'))}</summary>${t('set.signInGuide')}</details>
+        <div class="field"><label for="redirectUri">${esc(t('set.redirectUri'))}</label>
+          <div class="copy-row"><input id="redirectUri" readonly value="${esc(s.redirectUri)}"><button type="button" class="btn small" data-copy="redirectUri">${esc(t('set.copy'))}</button></div>
+          <div class="fh">${esc(t('set.redirectUriHint'))}</div></div>
+        <div class="field"><label for="s_tenant">Directory (tenant) ID</label>
+          <input id="s_tenant" name="tenantId" value="${esc(s.tenantId)}" placeholder="00000000-0000-0000-0000-000000000000"></div>
+        <div class="field"><label for="s_client">Application (client) ID</label>
+          <input id="s_client" name="clientId" value="${esc(s.clientId)}" placeholder="00000000-0000-0000-0000-000000000000"></div>
+      </section>
+
+      <section class="set-step">
+        <h3>2. ${esc(t('set.workflowTitle'))} ${statusChip(s.workflowConfigured, s.workflowConfigured ? t('set.saved') : t('set.missing'))}</h3>
+        <details class="set-guide"><summary>${esc(t('set.howTo'))}</summary>${t('set.workflowGuide')}</details>
+        <div class="field"><label for="s_workflow">${esc(t('set.workflowUrl'))}</label>
+          <input id="s_workflow" name="workflowUrl" type="password" placeholder="${esc(s.workflowConfigured ? t('set.workflowKeep') : 'https://…')}">
+          <div class="fh">${esc(t('set.workflowHint'))}</div></div>
+      </section>
+
+      <div class="set-actions">
+        <button type="submit" class="btn primary">${esc(t('dlg.save'))}</button>
+        <span id="settingsMsg" class="muted"></span>
+      </div>
+    </form>
+
+    <section class="set-step">
+      <h3>3. ${esc(t('set.testTitle'))}</h3>
+      <p class="hint">${esc(t('set.testHelp'))}</p>
+      <form id="testForm" class="copy-row" autocomplete="off">
+        <input id="testEmail" type="email" placeholder="${esc(t('set.testPh'))}" ${s.workflowConfigured ? '' : 'disabled'}>
+        <button type="submit" class="btn small" ${s.workflowConfigured ? '' : 'disabled'}>${esc(t('set.testSend'))}</button>
+      </form>
+      <p id="testMsg" class="muted"></p>
+    </section>`;
+
+  $('#settingsForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const msg = $('#settingsMsg');
+    msg.className = 'muted'; msg.textContent = '';
+    f.querySelector('button[type=submit]').disabled = true;
+    try {
+      await api('PUT', '/api/settings/notifications', {
+        tenantId: f.tenantId.value.trim(), clientId: f.clientId.value.trim(),
+        workflowUrl: f.workflowUrl.value.trim() || null   // boş: kayıtlı adres değişmez
+      });
+      await renderSettings();
+      $('#settingsMsg').textContent = t('nt.saved');
+    } catch (err) {
+      msg.className = 'error'; msg.textContent = err.message;
+      f.querySelector('button[type=submit]').disabled = false;
+    }
+  };
+  $('#testForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = $('#testMsg');
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; msg.className = 'muted'; msg.textContent = t('set.testSending');
+    try {
+      await api('POST', '/api/settings/notifications/test', { email: $('#testEmail').value.trim() });
+      msg.textContent = t('set.testSent');
+    } catch (err) { msg.className = 'error'; msg.textContent = err.message; }
+    finally { btn.disabled = false; }
+  };
+}
+
+$('#settingsPanel').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const input = $('#' + b.dataset.copy);
+  try { await navigator.clipboard.writeText(input.value); } catch { input.select(); document.execCommand('copy'); }
+  b.textContent = t('set.copied');
+  setTimeout(() => { b.textContent = t('set.copy'); }, 1200);
+});
 
 // Bir bağlantıyı bir uygulamayla ilişkilendirir ve tanımları yeniler.
 async function attach(appId, connId) {
@@ -1515,21 +1600,20 @@ $('#tab-defs').addEventListener('change', (e) => {
   if (e.target.matches('[data-notify-rule]')) saveNotifyRules(e.target.closest('.notify'));
 });
 $('#meBtn').addEventListener('click', () => {
-  if (!me) return;
-  if (notifyMode === 'microsoft') { if (confirm(t('nt.msSignedIn', { name: me.name }))) location.href = '/auth/microsoft/signout'; }
-  else personForm(me);
+  if (me && confirm(t('nt.msSignedIn', { name: me.name }))) location.href = '/auth/microsoft/signout';
 });
 
 (async function init() {
   applyI18n();
   renderMe();
-  // Bildirim modu; Microsoft modunda kişi oturumdan, diğerlerinde tarayıcının hatırladığı kişi (Monitor'den silindiyse unutulur).
+  // Kurulum tamam mı ve Microsoft hesabıyla giriş yapmış kişi (oturum sunucuda; tarayıcıda kişi bilgisi tutulmaz).
   try {
     const info = await api('GET', '/api/notify/me');
-    notifyMode = info.mode;
-    if (notifyMode === 'microsoft') { me = info.person; renderMe(); }
-  } catch { /* eski Monitor: webhook modu */ }
-  if (me && notifyMode !== 'microsoft') { try { me = await api('GET', '/api/people/' + me.id); save('person', me); renderMe(); } catch { me = null; save('person', null); renderMe(); } }
+    notifyReady = !!info.ready;
+    me = info.person;
+    renderMe();
+  } catch { /* eski Monitor */ }
+  save('person', null);   // önceki sürümün tarayıcıda hatırladığı kişi
   // Giriş zorunluysa (Monitor:AdminPassword tanımlı) çıkış düğmesini gösteriyoruz.
   try { const me = await api('GET', '/api/auth/me'); $('#logout').hidden = !me.loginRequired; } catch { /* yönlendirildi */ }
   if (detailAppId) {
@@ -1537,10 +1621,12 @@ $('#meBtn').addEventListener('click', () => {
     document.body.classList.add('detail-mode');
     $('#tab-monitor').hidden = true;
     $('#tab-defs').hidden = true;
+    $('#tab-settings').hidden = true;
     $('#tab-detail').hidden = false;
     $('#navTools').hidden = true;
   } else {
-    setTab(load('tab', 'monitor'));
+    // Kurulum eksikken girişten dönülen adres: /?settings=notifications
+    setTab(new URLSearchParams(location.search).has('settings') ? 'settings' : load('tab', 'monitor'));
   }
   await loadDefs();
   await refreshMonitor();

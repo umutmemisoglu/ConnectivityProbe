@@ -16,7 +16,8 @@ var builder = WebApplication.CreateBuilder(args);
 // step 1: Ayarları, tanım deposunu ve arka planda periyodik test yapan servisi ekliyoruz.
 builder.Services.Configure<MonitorOptions>(builder.Configuration.GetSection("Monitor"));
 builder.Services.AddSingleton<DefinitionStore>();
-builder.Services.AddSingleton<PodStateStore>();   // görülen / eksik pod'lar diske yazılır (data/pod-state.json)
+builder.Services.AddSingleton<PodStateStore>();
+builder.Services.AddSingleton<SettingsStore>();     // Teams bildirimlerinin kurulum ayarları (data/settings.json)   // görülen / eksik pod'lar diske yazılır (data/pod-state.json)
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<INotificationSender, TeamsWebhookSender>();
 builder.Services.AddSingleton<NotificationService>();                  // Teams bildirimleri
@@ -40,50 +41,45 @@ var authentication = builder.Services.AddAuthentication(CookieAuthenticationDefa
     o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
 });
 
-// step 1c: Microsoft (Entra ID) ile giriş: yalnızca Monitor:Auth:TenantId ve ClientId verildiyse. Bildirim almak isteyen kişiyi
-//          tanımak içindir (adı, e-postası); arayüzün admin girişinden ayrıdır. Client secret gerekmez: Entra ID, imzalı
-//          kimlik belirtecini (id_token) doğrudan tarayıcı üzerinden geri gönderir.
-var startupOptions = builder.Configuration.GetSection("Monitor").Get<MonitorOptions>() ?? new MonitorOptions();
-if (startupOptions.Auth.Enabled)
-{
-    authentication
-        .AddCookie(MicrosoftLogin.PersonScheme, o =>
-        {
-            o.Cookie.Name = "cpperson";
-            o.Cookie.HttpOnly = true;
-            o.Cookie.SameSite = SameSiteMode.Lax;    // Microsoft'tan dönüşte (site dışından gelen yönlendirme) gönderilsin
-            o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-            o.ExpireTimeSpan = TimeSpan.FromDays(180);
-            o.SlidingExpiration = true;
-            o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
-        })
-        .AddOpenIdConnect(MicrosoftLogin.MicrosoftScheme, o =>
-        {
-            o.Authority = $"https://login.microsoftonline.com/{startupOptions.Auth.TenantId!.Trim()}/v2.0";
-            o.ClientId = startupOptions.Auth.ClientId!.Trim();
-            o.ResponseType = "id_token";
-            o.ResponseMode = "form_post";
-            o.Scope.Clear();
-            foreach (var scope in new[] { "openid", "profile", "email" }) o.Scope.Add(scope);
-            o.SignInScheme = MicrosoftLogin.PersonScheme;
-            o.CallbackPath = "/signin-oidc";
-            o.MapInboundClaims = false;                  // oid, name, email, preferred_username olduğu gibi kalsın
-            o.TokenValidationParameters.NameClaimType = "name";
-            // Doğrulama çerezleri Microsoft'tan dönen form ile gönderilir (site dışı POST): SameSite=None + Secure gerekir.
-            // Tarayıcılar http://localhost'u güvenli saydığı için yerel denemede de çalışır.
-            o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
-            o.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
-        });
-
-    // Monitor bir ingress / reverse proxy arkasında https ile yayınlanıyorsa, dönüş adresi (redirect URI) https olarak
-    // kurulabilsin diye X-Forwarded-Proto ve X-Forwarded-Host dikkate alınır. Entra ID yalnızca kayıtlı adreslere döner.
-    builder.Services.Configure<ForwardedHeadersOptions>(o =>
+// step 1c: Microsoft (Entra ID) ile giriş: "Bana haber ver" diyen kişiyi tanımak için (adı, e-postası); arayüzün admin
+//          girişinden ayrıdır. Tenant ve client bilgileri Ayarlar'dan canlı okunur (MicrosoftLoginOptions). Client secret
+//          gerekmez: Entra ID, imzalı kimlik belirtecini (id_token) doğrudan tarayıcı üzerinden geri gönderir.
+authentication
+    .AddCookie(MicrosoftLogin.PersonScheme, o =>
     {
-        o.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-        o.KnownIPNetworks.Clear();
-        o.KnownProxies.Clear();
+        o.Cookie.Name = "cpperson";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SameSite = SameSiteMode.Lax;        // Microsoft'tan dönüşte (site dışından gelen yönlendirme) gönderilsin
+        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        o.ExpireTimeSpan = TimeSpan.FromDays(180);
+        o.SlidingExpiration = true;
+        o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
+    })
+    .AddOpenIdConnect(MicrosoftLogin.MicrosoftScheme, o =>
+    {
+        o.ResponseType = "id_token";
+        o.ResponseMode = "form_post";
+        o.Scope.Clear();
+        foreach (var scope in new[] { "openid", "profile", "email" }) o.Scope.Add(scope);
+        o.SignInScheme = MicrosoftLogin.PersonScheme;
+        o.CallbackPath = "/signin-oidc";
+        o.MapInboundClaims = false;                      // oid, name, email, preferred_username olduğu gibi kalsın
+        o.TokenValidationParameters.NameClaimType = "name";
+        // Doğrulama çerezleri Microsoft'tan dönen form ile gönderilir (site dışı POST): SameSite=None + Secure gerekir.
+        // Tarayıcılar http://localhost'u güvenli saydığı için yerel denemede de çalışır.
+        o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+        o.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
     });
-}
+builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, MicrosoftLoginOptions>();
+
+// Monitor bir ingress / reverse proxy arkasında https ile yayınlanıyorsa, dönüş adresi (redirect URI) https olarak kurulabilsin
+// diye X-Forwarded-Proto ve X-Forwarded-Host dikkate alınır. Entra ID yalnızca kayıtlı adreslere döner.
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+    o.KnownIPNetworks.Clear();
+    o.KnownProxies.Clear();
+});
 
 var app = builder.Build();
 var monitorOptions = app.Services.GetRequiredService<IOptions<MonitorOptions>>().Value;
@@ -95,7 +91,12 @@ if (!loginRequired)
 //   - /api/agent/*: Strict pod'ların uçları; giriş değil uygulama anahtarı (X-ConnectivityProbe-AppKey) ister.
 //   - Giriş sayfası ve giriş uçları: herkese açık.
 //   - Geri kalan her şey (arayüz, tanımlar, monitör): şifre tanımlıysa giriş yapmış kullanıcı; tanımlı değilse yalnızca localhost.
-if (monitorOptions.Auth.Enabled) app.UseForwardedHeaders();
+// Ayarlar kaydedilince Microsoft girişi yeni bilgilerle yeniden yapılandırılır (Monitor'ü yeniden başlatmak gerekmez).
+var settingsStore = app.Services.GetRequiredService<SettingsStore>();
+var oidcCache = app.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConnectOptions>>();
+settingsStore.Changed += () => oidcCache.TryRemove(MicrosoftLogin.MicrosoftScheme);
+
+app.UseForwardedHeaders();
 app.UseAuthentication();
 app.Use(async (ctx, next) =>
 {
@@ -479,29 +480,44 @@ api.MapPut("/apps/{id}/notify", (string id, NotifyInput input, DefinitionStore s
     return app == null ? Results.NotFound() : Results.Ok(AppView.From(app));
 });
 
-// Bildirim modu ve (Microsoft girişinde) oturumdaki kişi. Arayüz "Bana haber ver"in nasıl çalışacağını buradan öğrenir.
-api.MapGet("/notify/me", async (HttpContext ctx, DefinitionStore store) =>
+// Kurulum tamam mı ve oturumdaki kişi (Microsoft hesabıyla giriş yaptıysa). Arayüz "Bana haber ver"in ne yapacağını buradan
+// öğrenir: kurulum yoksa önce Ayarlar'a yönlendirir; giriş yoksa Microsoft giriş sayfasına gider.
+api.MapGet("/notify/me", async (HttpContext ctx, DefinitionStore store, SettingsStore settings) =>
 {
-    var mode = monitorOptions.NotifyMode;
     PersonView? me = null;
-    if (mode == "microsoft"
-        && MicrosoftLogin.PersonOf((await ctx.AuthenticateAsync(MicrosoftLogin.PersonScheme)).Principal) is { } who
+    if (MicrosoftLogin.PersonOf((await ctx.AuthenticateAsync(MicrosoftLogin.PersonScheme)).Principal) is { } who
         && store.Snapshot().People.FirstOrDefault(p => p.Id == who.Id) is { } person)
         me = PersonView.From(person);
-    return Results.Ok(new { mode, person = me });
+    return Results.Ok(new { ready = settings.Current.Ready, person = me });
 });
 
 // Microsoft ile giriş ve (girişten dönünce) otomatik abonelik:
 //   /auth/microsoft?app=<uygulama>&returnUrl=/?app=<uygulama>
 // Oturum yoksa Microsoft giriş sayfasına gider ve aynı adrese döner; oturum varsa kişiyi kaydeder/günceller, uygulamaya
 // abone eder ve kişiyi geldiği sayfaya geri gönderir.
-app.MapGet("/auth/microsoft", async (HttpContext ctx, [Microsoft.AspNetCore.Mvc.FromQuery(Name = "app")] string? appId, string? returnUrl, DefinitionStore store, NotificationService notifications) =>
+app.MapGet("/auth/microsoft", async (HttpContext ctx, [Microsoft.AspNetCore.Mvc.FromQuery(Name = "app")] string? appId, string? returnUrl,
+    DefinitionStore store, SettingsStore settings, NotificationService notifications) =>
 {
-    if (monitorOptions.NotifyMode != "microsoft") return Results.NotFound();
+    if (!settings.Current.Ready) return MicrosoftLogin.PageRedirect("/?settings=notifications");
     var auth = await ctx.AuthenticateAsync(MicrosoftLogin.PersonScheme);
     if (MicrosoftLogin.PersonOf(auth.Principal) is not { } who)
-        return Results.Challenge(new AuthenticationProperties { RedirectUri = ctx.Request.Path + ctx.Request.QueryString },
-            new[] { MicrosoftLogin.MicrosoftScheme });
+    {
+        // Microsoft giriş sayfasına yönlendirme. Tenant kimliği yanlışsa ya da Monitor Microsoft'a erişemiyorsa (proxy,
+        // firewall) yönlendirme adresi alınamaz; kişiye anlaşılır bir sayfa gösterilir.
+        try
+        {
+            await ctx.ChallengeAsync(MicrosoftLogin.MicrosoftScheme,
+                new AuthenticationProperties { RedirectUri = ctx.Request.Path + ctx.Request.QueryString });
+            return Results.Empty;
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "Microsoft sign-in could not start");
+            return MicrosoftLogin.ErrorPage(Lang.T(
+                "Microsoft giriş sayfası açılamadı. Ayarlar → Teams bildirimleri bölümündeki Directory (tenant) ID yanlış olabilir ya da Monitor login.microsoftonline.com adresine erişemiyor olabilir.",
+                "The Microsoft sign-in page could not be opened. The Directory (tenant) ID under Settings → Teams notifications may be wrong, or the Monitor cannot reach login.microsoftonline.com."));
+        }
+    }
 
     var lang = ctx.Request.Cookies[Lang.Cookie] == "en" ? "en" : "tr";
     var (person, created) = store.Mutate(d =>
@@ -517,7 +533,7 @@ app.MapGet("/auth/microsoft", async (HttpContext ctx, [Microsoft.AspNetCore.Mvc.
             target.SubscriberIds.Add(p.Id);
         return (p, isNew);
     });
-    // İlk girişte Teams'e hoş geldin mesajı (gelmezse kayıt yine yapılır; Monitor günlüğüne yazılır).
+    // İlk girişte Teams'e hoş geldin mesajı (gelmezse abonelik yine yapılır; Monitor günlüğüne yazılır).
     if (created && await notifications.SendWelcomeAsync(person, ctx.RequestAborted) is { } error)
         app.Logger.LogWarning("Welcome message to {Person} failed: {Error}", person.Name, error);
     return MicrosoftLogin.PageRedirect(returnUrl ?? "/");
@@ -526,80 +542,54 @@ app.MapGet("/auth/microsoft", async (HttpContext ctx, [Microsoft.AspNetCore.Mvc.
 // Bu tarayıcıdaki Microsoft oturumunu kapatır (bildirimler sürer; tekrar "Bana haber ver" denince yeniden girilir).
 app.MapGet("/auth/microsoft/signout", async (HttpContext ctx) =>
 {
-    if (monitorOptions.NotifyMode == "microsoft") await ctx.SignOutAsync(MicrosoftLogin.PersonScheme);
+    await ctx.SignOutAsync(MicrosoftLogin.PersonScheme);
     return MicrosoftLogin.PageRedirect("/");
 });
 
-// "Bana haber ver" ilk kez (Microsoft girişi yoksa): kişi bir kez kaydolur ve bir deneme mesajı gönderilir; gelmezse kayıt
-// yapılmaz.
-//   - email modu (merkezi iş akışı): adı ve Teams e-postası.
-//   - webhook modu: adı ve kendi Teams Workflows iş akışının adresi (gizli; arayüze geri gönderilmez).
-api.MapPost("/people", async (PersonInput input, HttpContext ctx, DefinitionStore store, NotificationService notifications) =>
+// ---------------------------------------------------------------------------------------------
+// Ayarlar → Teams bildirimleri (tek seferlik kurulum). İş akışı adresi gizlidir; hiçbir zaman geri gönderilmez.
+// ---------------------------------------------------------------------------------------------
+
+api.MapGet("/settings/notifications", (HttpContext ctx, SettingsStore settings) =>
 {
-    var mode = monitorOptions.NotifyMode;
-    if (mode == "microsoft")
-        return Results.BadRequest(new { error = Lang.T("Bu Monitor'de Microsoft hesabıyla giriş kullanılıyor.", "This Monitor uses Microsoft sign-in.") });
-    if (ValidateName(input.Name) is { } nameError) return Results.BadRequest(new { error = nameError });
-    if (mode == "email" && ValidateEmail(input.Email) is { } emailError) return Results.BadRequest(new { error = emailError });
-    if (mode == "webhook" && ValidateWebhook(input.WebhookUrl) is { } urlError) return Results.BadRequest(new { error = urlError });
-
-    var person = new PersonDefinition
+    var s = settings.Current;
+    return Results.Ok(new
     {
-        Id = NewId(), Name = input.Name!.Trim(), Lang = input.Lang == "en" ? "en" : "tr", Source = mode,
-        Email = mode == "email" ? input.Email!.Trim() : "", WebhookUrl = mode == "webhook" ? input.WebhookUrl!.Trim() : "",
-        MonitorUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}", CreatedAtUtc = DateTime.UtcNow
-    };
-    if (await notifications.SendWelcomeAsync(person, ctx.RequestAborted) is { } sendError)
-        return Results.BadRequest(new { error = mode == "email"
-            ? Lang.T($"Teams'e deneme mesajı gönderilemedi ({sendError}). E-posta adresini kontrol edin; adres doğruysa Monitor yöneticisi merkezi Teams iş akışını kontrol etmeli.",
-                     $"The test message could not be sent to Teams ({sendError}). Check the e-mail address; if it is correct, the Monitor administrator should check the central Teams workflow.")
-            : Lang.T($"Teams adresine deneme mesajı gönderilemedi ({sendError}). Adresi ve iş akışının açık olduğunu kontrol edin.",
-                     $"The test message could not be sent to the Teams address ({sendError}). Check the address and that the workflow is on.") });
+        tenantId = s.TenantId ?? "", clientId = s.ClientId ?? "",
+        workflowConfigured = s.WorkflowConfigured, signInConfigured = s.SignInConfigured, ready = s.Ready,
+        // Entra ID kaydına girilecek dönüş adresi (bu Monitor'ün adresiyle).
+        redirectUri = $"{ctx.Request.Scheme}://{ctx.Request.Host}/signin-oidc"
+    });
+});
 
-    store.Mutate(d => { d.People.Add(person); return 0; });
-    return Results.Ok(PersonView.From(person));
+// Kaydeder. Alan gönderilmezse (null) değişmez; iş akışı adresi yalnızca yeni değer yazılınca değişir.
+api.MapPut("/settings/notifications", (NotifySettingsInput input, SettingsStore settings) =>
+{
+    if (!string.IsNullOrWhiteSpace(input.TenantId) && !Guid.TryParse(input.TenantId.Trim(), out _))
+        return Results.BadRequest(new { error = Lang.T("Directory (tenant) ID bir GUID olmalı (ör. 1234abcd-…).", "Directory (tenant) ID must be a GUID (e.g. 1234abcd-…).") });
+    if (!string.IsNullOrWhiteSpace(input.ClientId) && !Guid.TryParse(input.ClientId.Trim(), out _))
+        return Results.BadRequest(new { error = Lang.T("Application (client) ID bir GUID olmalı.", "Application (client) ID must be a GUID.") });
+    if (!string.IsNullOrWhiteSpace(input.WorkflowUrl) && ValidateWebhook(input.WorkflowUrl) is { } urlError)
+        return Results.BadRequest(new { error = urlError });
+    settings.Save(input.TenantId, input.ClientId, string.IsNullOrWhiteSpace(input.WorkflowUrl) ? null : input.WorkflowUrl);
+    return Results.NoContent();
+});
+
+// Merkezi iş akışından verilen e-postaya deneme mesajı gönderir (kurulumu doğrulamak için).
+api.MapPost("/settings/notifications/test", async (NotifyTestInput input, HttpContext ctx, SettingsStore settings, NotificationService notifications) =>
+{
+    if (!settings.Current.WorkflowConfigured)
+        return Results.BadRequest(new { error = Lang.T("Önce merkezi iş akışı adresini kaydedin.", "Save the central workflow address first.") });
+    if (ValidateEmail(input.Email) is { } emailError) return Results.BadRequest(new { error = emailError });
+    var probe = new PersonDefinition { Name = input.Email!.Trim(), Email = input.Email.Trim(), Lang = ctx.Request.Cookies[Lang.Cookie] == "en" ? "en" : "tr" };
+    return await notifications.SendWelcomeAsync(probe, ctx.RequestAborted) is { } error
+        ? Results.BadRequest(new { error = Lang.T($"Deneme mesajı gönderilemedi: {error}", $"The test message could not be sent: {error}") })
+        : Results.NoContent();
 });
 
 // Tarayıcının hatırladığı kişi hâlâ kayıtlı mı.
 api.MapGet("/people/{id}", (string id, DefinitionStore store) =>
     store.Snapshot().People.FirstOrDefault(p => p.Id == id) is { } p ? Results.Ok(PersonView.From(p)) : Results.NotFound());
-
-// Kişinin adını, dilini ve (moda göre) e-postasını veya Teams adresini günceller. Adres / e-posta boşsa değişmez;
-// değişirse deneme mesajı gönderilir.
-api.MapPut("/people/{id}", async (string id, PersonInput input, HttpContext ctx, DefinitionStore store, NotificationService notifications) =>
-{
-    if (ValidateName(input.Name) is { } nameError) return Results.BadRequest(new { error = nameError });
-    var current = store.Snapshot().People.FirstOrDefault(p => p.Id == id);
-    if (current == null) return Results.NotFound();
-    if (current.Source == "microsoft")
-        return Results.BadRequest(new { error = Lang.T("Microsoft hesabıyla kaydolan kişinin bilgileri hesaptan gelir.", "Details of a person signed in with Microsoft come from the account.") });
-
-    var newUrl = string.IsNullOrWhiteSpace(input.WebhookUrl) ? null : input.WebhookUrl.Trim();
-    var newEmail = string.IsNullOrWhiteSpace(input.Email) ? null : input.Email.Trim();
-    if (newUrl != null && ValidateWebhook(newUrl) is { } urlError) return Results.BadRequest(new { error = urlError });
-    if (newEmail != null && ValidateEmail(newEmail) is { } emailError) return Results.BadRequest(new { error = emailError });
-    if (newUrl != null || newEmail != null)
-    {
-        current.Name = input.Name!.Trim();
-        current.Lang = input.Lang == "en" ? "en" : "tr";
-        if (newUrl != null) current.WebhookUrl = newUrl;
-        if (newEmail != null) current.Email = newEmail;
-        if (await notifications.SendWelcomeAsync(current, ctx.RequestAborted) is { } sendError)
-            return Results.BadRequest(new { error = Lang.T($"Teams'e deneme mesajı gönderilemedi ({sendError}).", $"The test message could not be sent ({sendError}).") });
-    }
-    var updated = store.Mutate(d =>
-    {
-        var p = d.People.FirstOrDefault(x => x.Id == id);
-        if (p == null) return null;
-        p.Name = input.Name!.Trim();
-        p.Lang = input.Lang == "en" ? "en" : "tr";
-        p.MonitorUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
-        if (newUrl != null) p.WebhookUrl = newUrl;
-        if (newEmail != null) p.Email = newEmail;
-        return p;
-    });
-    return updated == null ? Results.NotFound() : Results.Ok(PersonView.From(updated));
-});
 
 // Kişiyi siler ve tüm uygulamaların bildirim listesinden çıkarır.
 api.MapDelete("/people/{id}", (string id, DefinitionStore store) =>

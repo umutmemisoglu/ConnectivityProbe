@@ -3,11 +3,17 @@
 **English** | [Türkçe](teams-kurulum.md)
 
 Connectivity Monitor sends a personal Teams message to subscribers when a selected situation occurs in an application
-(connection down, certificate expiring, memory close to the limit...). How the "🔔 Notify me" button works is chosen
-automatically from the Monitor settings:
+(connection down, certificate expiring, memory close to the limit...).
 
-| Settings | "Notify me" | What the person does |
-|---|---|---|
+The setup is done **only once**: **Monitor → Settings → Teams notifications**. After that, anyone who wants notifications
+clicks **🔔 Notify me** on an application, signs in with their Microsoft (Teams) account and is added to the notification
+list automatically; nobody is asked for anything. If "Notify me" is clicked before the setup is complete, the person is told
+so and Settings opens.
+
+The Settings screen shows the status of each step (Configured / Saved / Missing), a step-by-step guide, the Redirect URI to
+enter in the Entra ID registration (with a copy button) and **Send test message** to verify the setup.
+
+---|---|---|
 | Central workflow **and** Microsoft sign-in | Sign in with Microsoft, subscribed automatically on return | Nothing (usually not even a password) |
 | Central workflow only | Name and company e-mail, the first time | Types their e-mail once |
 | Neither | Name and the address of their own workflow, the first time | Creates their own Teams workflow |
@@ -69,7 +75,16 @@ chat message from Flow bot.
    If no personal message from *Workflows* arrives, check the flow's **Run history** in Power Automate. The most common
    cause is a Power Platform data policy (DLP) restricting the Teams connector.
 
-## 4. Monitor settings
+## 4. Enter them in the Monitor
+
+Enter the Directory (tenant) ID, the Application (client) ID and the workflow address under **Monitor → Settings → Teams
+notifications** and click **Save**; no restart is needed. Then **send a test message** to your own e-mail.
+
+- The settings are stored in the Monitor's data folder (`data/settings.json`); in Kubernetes it must be on a persistent volume.
+- The workflow address is secret: once saved it is never shown in the UI or returned by any API. Paste a new address to
+  change it; leaving the field empty keeps the saved one.
+
+The values can also be given as environment variables; a value entered on the Settings screen takes precedence:
 
 | Setting | Environment variable | Secret |
 |---|---|---|
@@ -77,25 +92,12 @@ chat message from Flow bot.
 | `Monitor:Auth:ClientId` | `Monitor__Auth__ClientId` | No |
 | `Monitor:Notifications:WorkflowUrl` | `Monitor__Notifications__WorkflowUrl` | **Yes** (use a secret) |
 
-Kubernetes example:
-
-```yaml
-env:
-  - name: Monitor__Auth__TenantId
-    value: "<directory-tenant-id>"
-  - name: Monitor__Auth__ClientId
-    value: "<application-client-id>"
-  - name: Monitor__Notifications__WorkflowUrl
-    valueFrom: { secretKeyRef: { name: connectivity-monitor, key: teams-workflow-url } }
-```
-
 The Monitor needs outbound HTTPS to Microsoft (`login.microsoftonline.com`) and to the workflow address; behind a proxy,
-`HTTPS_PROXY` is used.
+`HTTPS_PROXY` is used. If the tenant ID is wrong or Microsoft cannot be reached, "Notify me" shows a page explaining it.
 
 ## What it looks like
 
 - **Definitions → application card → 🔔 Notifications:** which situations notify for this application (grouped, described
   options; independent of people) and who is notified.
-- **🔔 Notify me:** on the card and on the application's details page. In Microsoft mode, the first click signs in; after
-  that it is a single click.
-- Your name appears at the top right; in Microsoft mode, clicking it signs out in this browser (notifications continue).
+- **🔔 Notify me:** on the card and on the application's details page. The first click signs in; after that it is a single click.
+- Your name appears at the top right; clicking it signs out in this browser (notifications continue).

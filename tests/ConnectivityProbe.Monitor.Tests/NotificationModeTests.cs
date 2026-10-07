@@ -9,15 +9,37 @@ namespace ConnectivityProbe.Monitor.Tests;
 public class NotificationModeTests
 {
     [Theory]
-    [InlineData(null, null, null, "webhook")]                                   // hiçbir ayar yok: kişi kendi iş akışını kurar
-    [InlineData("https://flow.example/hook", null, null, "email")]              // merkezi iş akışı: kişi e-postasını yazar
-    [InlineData("https://flow.example/hook", "tenant", "client", "microsoft")]  // + Microsoft girişi: otomatik
-    [InlineData(null, "tenant", "client", "webhook")]                           // giriş var ama merkezi iş akışı yok
-    [InlineData("https://flow.example/hook", "tenant", "", "email")]            // eksik giriş ayarı
-    public void Mode_is_chosen_from_the_settings(string? workflow, string? tenant, string? client, string expected)
+    [InlineData(null, null, null, false)]                                    // hiçbir ayar yok
+    [InlineData("https://flow.example/hook", null, null, false)]             // giriş ayarı eksik
+    [InlineData(null, "tenant", "client", false)]                            // merkezi iş akışı eksik
+    [InlineData("https://flow.example/hook", "tenant", "", false)]           // client eksik
+    [InlineData("https://flow.example/hook", "tenant", "client", true)]      // kurulum tamam
+    public void Setup_is_ready_only_with_sign_in_and_workflow(string? workflow, string? tenant, string? client, bool expected)
     {
-        var o = new MonitorOptions { Notifications = { WorkflowUrl = workflow }, Auth = { TenantId = tenant, ClientId = client } };
-        Assert.Equal(expected, o.NotifyMode);
+        using var h = new Harness(o => { o.Notifications.WorkflowUrl = workflow; o.Auth.TenantId = tenant; o.Auth.ClientId = client; });
+        Assert.Equal(expected, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)).Current.Ready);
+    }
+
+    [Fact]
+    public void Settings_saved_in_the_ui_override_the_configuration_and_survive_a_restart()
+    {
+        using var h = new Harness(o => { o.Auth.TenantId = "cfg-tenant"; o.Notifications.WorkflowUrl = "https://cfg.example"; });
+        var options = Microsoft.Extensions.Options.Options.Create(h.Options);
+        var store = new SettingsStore(h.Store, options);
+        var changed = 0;
+        store.Changed += () => changed++;
+
+        store.Save("ui-tenant", "ui-client", null);                 // iş akışı adresi gönderilmedi: değişmez
+        Assert.Equal(1, changed);
+        var reloaded = new SettingsStore(h.Store, options).Current;
+        Assert.Equal("ui-tenant", reloaded.TenantId);
+        Assert.Equal("ui-client", reloaded.ClientId);
+        Assert.Equal("https://cfg.example", reloaded.WorkflowUrl);
+        Assert.True(reloaded.Ready);
+
+        store.Save("", null, "https://ui.example");                 // boş = yapılandırmadaki değere dön
+        Assert.Equal("cfg-tenant", store.Current.TenantId);
+        Assert.Equal("https://ui.example", store.Current.WorkflowUrl);
     }
 
     private static readonly Dictionary<string, object?> Card = new() { ["type"] = "AdaptiveCard" };
@@ -26,7 +48,7 @@ public class NotificationModeTests
     public void Central_workflow_receives_the_recipient_and_the_card()
     {
         var person = new PersonDefinition { Name = "Ayşe", Email = "ayse@example.com", WebhookUrl = "https://own.example" };
-        var d = Delivery.For(person, new NotificationOptions { WorkflowUrl = "https://flow.example/hook" }, Card);
+        var d = Delivery.For(person, "https://flow.example/hook", Card);
         Assert.Equal("https://flow.example/hook", d!.Value.Url);
         var json = JsonSerializer.Serialize(d.Value.Payload);
         Assert.Contains("\"recipient\":\"ayse@example.com\"", json);
@@ -37,7 +59,7 @@ public class NotificationModeTests
     public void Personal_workflow_receives_a_teams_message_envelope()
     {
         var person = new PersonDefinition { Name = "Ayşe", WebhookUrl = "https://own.example" };
-        var d = Delivery.For(person, new NotificationOptions(), Card);
+        var d = Delivery.For(person, null, Card);
         Assert.Equal("https://own.example", d!.Value.Url);
         var json = JsonSerializer.Serialize(d.Value.Payload);
         Assert.Contains("\"type\":\"message\"", json);
@@ -48,7 +70,7 @@ public class NotificationModeTests
     public void Person_without_an_address_for_the_current_mode_is_skipped()
     {
         // Merkezi iş akışı kaldırıldı; Microsoft ile kaydolmuş kişinin kendi iş akışı yok.
-        Assert.Null(Delivery.For(new PersonDefinition { Email = "ayse@example.com" }, new NotificationOptions(), Card));
+        Assert.Null(Delivery.For(new PersonDefinition { Email = "ayse@example.com" }, null, Card));
     }
 
     [Fact]
@@ -94,7 +116,7 @@ public class NotificationModeTests
     {
         using var h = new Harness(o => o.Notifications.WorkflowUrl = "https://flow.example/hook");
         var sender = new FakeSender();
-        var service = new NotificationService(h.Store, sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
+        var service = new NotificationService(h.Store, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)), sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
         var app = h.AddApp("orders", new ConnectionDefinition { Id = "db", Name = "Ana DB", Host = "sql01", Port = 1433 });
         h.Store.Mutate(d =>
         {

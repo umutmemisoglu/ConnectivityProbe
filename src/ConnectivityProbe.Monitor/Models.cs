@@ -122,9 +122,10 @@ public sealed record RuleView(string Code, string Category, string Kind, string 
 
 public sealed record NotifyInput(List<string>? Rules);
 
-/// <param name="Email">Merkezi iş akışı modunda Teams e-postası.</param>
-/// <param name="WebhookUrl">Kişinin kendi Teams Workflows iş akışının adresi ("webhook" modunda; yalnızca kayıtta gönderilir).</param>
-public sealed record PersonInput(string? Name, string? WebhookUrl, string? Lang, string? Email = null);
+/// <summary>Ayarlar → Teams bildirimleri. null = değiştirme; iş akışı adresi yalnızca yeni değer yazılınca değişir.</summary>
+public sealed record NotifySettingsInput(string? TenantId, string? ClientId, string? WorkflowUrl);
+
+public sealed record NotifyTestInput(string? Email);
 
 /// <summary>Bağlantı tanımının arayüze giden hali.</summary>
 public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls)

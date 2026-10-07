@@ -46,18 +46,18 @@ public sealed class NotificationService : BackgroundService
 
     private readonly NotificationEngine _engine;
     private readonly INotificationSender _sender;
-    private readonly NotificationOptions _options;
+    private readonly SettingsStore _settings;
     private readonly ILogger<NotificationService> _log;
     private readonly Channel<Outgoing> _queue = Channel.CreateUnbounded<Outgoing>();
     private readonly string _statePath;
     private readonly object _gate = new();
     private DateTime _lastSave;
 
-    public NotificationService(DefinitionStore store, INotificationSender sender, Microsoft.Extensions.Options.IOptions<MonitorOptions> options,
-        ILogger<NotificationService> log)
+    public NotificationService(DefinitionStore store, SettingsStore settings, INotificationSender sender,
+        Microsoft.Extensions.Options.IOptions<MonitorOptions> options, ILogger<NotificationService> log)
     {
         _engine = new NotificationEngine(TimeSpan.FromSeconds(Math.Max(5, options.Value.IntervalSeconds)));
-        _options = options.Value.Notifications;
+        _settings = settings;
         _sender = sender;
         _log = log;
         _statePath = Path.Combine(Path.GetDirectoryName(store.FilePath)!, "notify-state.json");
@@ -105,7 +105,7 @@ public sealed class NotificationService : BackgroundService
 
     /// <summary>Kayıt sırasında deneme mesajı gönderir; ulaşılamıyorsa hata metnini döner.</summary>
     public async Task<string?> SendWelcomeAsync(PersonDefinition person, CancellationToken ct) =>
-        Delivery.For(person, _options, NotificationText.Welcome(person)) is { } d
+        Delivery.For(person, _settings.Current.WorkflowUrl, NotificationText.Welcome(person)) is { } d
             ? await _sender.SendAsync(d.Url, d.Payload, ct)
             : "no delivery address";
 
@@ -115,10 +115,10 @@ public sealed class NotificationService : BackgroundService
         {
             await foreach (var d in _queue.Reader.ReadAllAsync(ct))
             {
-                // Mod değişmiş olabilir (ör. merkezi iş akışı sonradan ayarlandı): adres her gönderimde yeniden seçilir.
-                if (Delivery.For(d.Person, _options, NotificationText.Card(d.Batch, d.Person, d.AtUtc)) is not { } target)
+                // Ayarlar değişmiş olabilir (ör. iş akışı adresi yenilendi): adres her gönderimde güncel ayardan alınır.
+                if (Delivery.For(d.Person, _settings.Current.WorkflowUrl, NotificationText.Card(d.Batch, d.Person, d.AtUtc)) is not { } target)
                 {
-                    _log.LogWarning("Notification to {Person} skipped: no delivery address for the current mode", d.Person.Name);
+                    _log.LogWarning("Notification to {Person} skipped: Teams notifications are not set up (Settings)", d.Person.Name);
                     continue;
                 }
                 string? error = null;

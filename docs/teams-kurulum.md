@@ -3,11 +3,17 @@
 [English](teams-setup.md) | **Türkçe**
 
 Connectivity Monitor, uygulamalarda seçili durumlar oluştuğunda (bağlantı koptu, sertifika bitiyor, bellek limite yakın...)
-abone olan kişilere Teams'ten özel mesaj gönderir. "🔔 Bana haber ver" düğmesinin nasıl çalışacağı, Monitor'e girilen
-ayarlara göre kendiliğinden seçilir:
+abone olan kişilere Teams'ten özel mesaj gönderir.
 
-| Girilen ayarlar | "Bana haber ver" | Kişi ne yapar |
-|---|---|---|
+Kurulum **yalnızca bir kez** yapılır: **Monitor → Ayarlar → Teams bildirimleri**. Sonra bildirim almak isteyen herkes bir
+uygulamada **🔔 Bana haber ver**'e tıklar, Microsoft (Teams) hesabıyla giriş yapar ve otomatik olarak bildirim listesine
+eklenir; kişiden hiçbir bilgi istenmez. Kurulum tamamlanmadan "Bana haber ver"e tıklanırsa önce kurulumun yapılması
+gerektiği söylenir ve Ayarlar açılır.
+
+Ayarlar ekranında her adımın durumu (Tanımlı / Kayıtlı / Eksik), adım adım rehber, Entra ID kaydına girilecek Redirect
+URI (kopyala düğmesiyle) ve kurulumu doğrulamak için **Deneme mesajı gönder** bulunur.
+
+---|---|---|
 | Merkezi iş akışı **ve** Microsoft girişi | Microsoft hesabıyla giriş, dönüşte otomatik abonelik | Hiçbir şey (çoğu zaman şifre de sorulmaz) |
 | Yalnızca merkezi iş akışı | İlk seferde ad ve şirket e-postası | Bir kez e-postasını yazar |
 | Hiçbiri | İlk seferde ad ve kendi iş akışının adresi | Teams'te kendi iş akışını kurar |
@@ -69,7 +75,16 @@ olarak iletir.
    Teams'e *Workflows* adına özel mesaj gelmezse Power Automate'te akışın **Run history**'sine bakın. En sık neden şirketin
    Power Platform veri politikasının (DLP) Teams bağlayıcısını kısıtlamasıdır.
 
-## 4. Monitor ayarları
+## 4. Monitor'e girin
+
+**Monitor → Ayarlar → Teams bildirimleri** ekranına Directory (tenant) ID, Application (client) ID ve iş akışı adresini
+girip **Kaydet**'e basın; Monitor'ü yeniden başlatmak gerekmez. Ardından kendi e-postanıza **Deneme mesajı gönder**in.
+
+- Ayarlar Monitor'ün veri klasöründe saklanır (`data/settings.json`); Kubernetes'te bu klasör kalıcı bir diskte olmalıdır.
+- İş akışı adresi gizlidir: kaydedildikten sonra arayüzde gösterilmez, hiçbir API'den geri dönmez. Değiştirmek için yeni
+  adresi yapıştırın; boş bırakılırsa kayıtlı adres değişmez.
+
+İsterseniz değerleri ortam değişkeniyle de verebilirsiniz; Ayarlar ekranında girilen değer bunların önüne geçer:
 
 | Ayar | Ortam değişkeni | Gizli mi |
 |---|---|---|
@@ -77,24 +92,13 @@ olarak iletir.
 | `Monitor:Auth:ClientId` | `Monitor__Auth__ClientId` | Hayır |
 | `Monitor:Notifications:WorkflowUrl` | `Monitor__Notifications__WorkflowUrl` | **Evet** (secret olarak verin) |
 
-Kubernetes örneği:
-
-```yaml
-env:
-  - name: Monitor__Auth__TenantId
-    value: "<directory-tenant-id>"
-  - name: Monitor__Auth__ClientId
-    value: "<application-client-id>"
-  - name: Monitor__Notifications__WorkflowUrl
-    valueFrom: { secretKeyRef: { name: connectivity-monitor, key: teams-workflow-url } }
-```
-
 Monitor'ün çalıştığı yerden Microsoft'a (`login.microsoftonline.com`) ve iş akışı adresine dışarı doğru HTTPS erişimi
-olmalıdır; proxy varsa `HTTPS_PROXY` kullanılır.
+olmalıdır; proxy varsa `HTTPS_PROXY` kullanılır. Tenant ID yanlışsa ya da Microsoft'a erişilemiyorsa "Bana haber ver"
+bunu açıklayan bir sayfa gösterir.
 
 ## Nasıl görünür
 
 - **Tanımlar → uygulama kartı → 🔔 Bildirimler:** uygulamanın hangi durumlarda bildirim göndereceği (kategorili, açıklamalı
   seçenekler; kişiden bağımsızdır) ve bildirim alanlar.
-- **🔔 Bana haber ver:** kartta ve uygulamanın detay sayfasında. Microsoft modunda ilk tıklamada giriş, sonrasında tek tık.
-- Sağ üstte adınız görünür; Microsoft modunda tıklayınca bu tarayıcıdaki oturum kapatılabilir (bildirimler sürer).
+- **🔔 Bana haber ver:** kartta ve uygulamanın detay sayfasında. İlk tıklamada Microsoft girişi, sonrasında tek tık.
+- Sağ üstte adınız görünür; tıklayınca bu tarayıcıdaki oturum kapatılabilir (bildirimler sürer).

@@ -32,22 +32,12 @@ public sealed class MonitorOptions
     /// <summary>Uyarı eşikleri (bkz. <see cref="AlertOptions"/>).</summary>
     public AlertOptions Alerts { get; set; } = new();
 
-    /// <summary>Teams bildirimlerinin gönderim yolu (bkz. <see cref="NotificationOptions"/>).</summary>
+    /// <summary>Teams bildirimleri: arayüzdeki Ayarlar boşsa kullanılan varsayılan (bkz. SettingsStore).</summary>
     public NotificationOptions Notifications { get; set; } = new();
 
-    /// <summary>Microsoft (Entra ID) ile giriş (bkz. <see cref="AuthOptions"/>).</summary>
+    /// <summary>Microsoft (Entra ID) ile giriş: arayüzdeki Ayarlar boşsa kullanılan varsayılan (bkz. SettingsStore).</summary>
     public AuthOptions Auth { get; set; } = new();
 
-    /// <summary>
-    /// "Bana haber ver"in nasıl çalışacağı, ayarlardan otomatik seçilir:
-    /// <list type="bullet">
-    /// <item><b>microsoft</b>: merkezi iş akışı ve Microsoft girişi ayarlı. Kişi Microsoft hesabıyla girer, otomatik abone olur.</item>
-    /// <item><b>email</b>: yalnızca merkezi iş akışı ayarlı. Kişi bir kez adını ve e-postasını yazar.</item>
-    /// <item><b>webhook</b>: hiçbiri ayarlı değil. Kişi kendi Teams iş akışını kurup adresini yapıştırır.</item>
-    /// </list>
-    /// </summary>
-    public string NotifyMode =>
-        !Notifications.Central ? "webhook" : Auth.Enabled ? "microsoft" : "email";
 }
 
 /// <summary>"Monitor:Notifications" bölümü.</summary>
@@ -55,7 +45,7 @@ public sealed class NotificationOptions
 {
     /// <summary>
     /// Merkezi Teams iş akışının (Workflows) adresi: gelen mesajı içindeki e-postaya Flow bot ile özel mesaj olarak gönderir.
-    /// Gizlidir; ortam değişkeniyle verin: Monitor__Notifications__WorkflowUrl. Boşsa her kişi kendi iş akışını kurar.
+    /// Gizlidir; Ayarlar ekranından ya da ortam değişkeniyle (secret) verin: Monitor__Notifications__WorkflowUrl.
     /// </summary>
     public string? WorkflowUrl { get; set; }
 

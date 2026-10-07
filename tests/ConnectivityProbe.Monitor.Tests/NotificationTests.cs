@@ -245,7 +245,7 @@ public class NotificationDeliveryTests
     {
         using var h = new Harness();
         var sender = new FakeSender();
-        var service = new NotificationService(h.Store, sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
+        var service = new NotificationService(h.Store, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)), sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
         var app = h.AddApp("orders", new ConnectionDefinition { Id = "db", Name = "Ana DB", Host = "sql01", Port = 1433 });
         h.Store.Mutate(d =>
         {
@@ -287,7 +287,7 @@ public class NotificationDeliveryTests
     {
         using var h = new Harness();
         var sender = new FakeSender();
-        var service = new NotificationService(h.Store, sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
+        var service = new NotificationService(h.Store, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)), sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
         var app = h.AddApp("orders", new ConnectionDefinition { Id = "db", Name = "db", Host = "sql01", Port = 1433 });
         h.Store.Mutate(d =>
         {

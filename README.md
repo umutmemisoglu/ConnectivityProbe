@@ -404,10 +404,10 @@ card → 🔔 Notifications). The rules are grouped and described in the UI:
 | Version / deploy | New version deployed · Deploy stuck |
 | Options | ✔ Also notify when resolved |
 
-Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page). With a
-central Teams workflow and Microsoft sign-in configured, the person signs in with their Microsoft account and is subscribed
-automatically; without sign-in they type their company e-mail once; without a central workflow they paste the address of
-their own Teams workflow once. After that, "Notify me" is a single click. Setup: [docs/teams-setup.md](docs/teams-setup.md).
+Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page), signs in
+with their Microsoft (Teams) account and is subscribed automatically; after that it is a single click. The one-time setup
+(Entra ID app registration + a central Teams workflow) is done under **Settings → Teams notifications**:
+[docs/teams-setup.md](docs/teams-setup.md).
 
 Notifications are designed not to be noisy: a situation is reported **only after it is confirmed** (e.g. 3 failed tests
 in a row, memory high for 5 minutes), **once** per incident, with all changes of an application in **one message**; a
