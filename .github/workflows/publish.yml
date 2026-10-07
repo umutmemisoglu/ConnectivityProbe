@@ -39,7 +39,7 @@ jobs:
         run: dotnet test tests/ConnectivityProbe.Monitor.Tests -c Release
 
       - name: Test (Monitor UI search)
-        run: node --test tests/monitor-ui
+        run: node --test tests/monitor-ui/search.test.js
 
       - name: Pack
         shell: bash

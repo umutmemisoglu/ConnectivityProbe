@@ -1,4 +1,4 @@
-// Monitor arayüzündeki alaka sıralı aramanın testleri (Node'un yerleşik test çalıştırıcısı): node --test tests/monitor-ui
+// Monitor arayüzündeki alaka sıralı aramanın testleri (Node'un yerleşik test çalıştırıcısı): node --test tests/monitor-ui/search.test.js
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
