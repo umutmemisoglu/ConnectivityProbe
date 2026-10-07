@@ -13,7 +13,7 @@ const I18N = {
     // üst menü
     'tab.monitor': 'Monitör', 'tab.defs': 'Tanımlar',
     'search.placeholder': 'Uygulama, anahtar, ekip, sürüm, ağ',
-    'onlyProblems': 'Sadece sorunlular', 'runNow': 'Şimdi test et', 'logout': 'Çıkış', 'logout.title': 'Oturumu kapat',
+    'onlyProblems': 'Sadece sorunlular', 'runNow': 'Şimdi test et', 'runNow.title': "Pod'lar zaten her test aralığında kendiliğinden test eder. Bir düzeltmeden sonra sonucu beklemeden görmek için: pod'lar en geç 10 saniye içinde yeniden test eder.", 'logout': 'Çıkış', 'logout.title': 'Oturumu kapat',
     'lang.title': 'Dil / Language',
     'meta.updated': 'güncellendi {t}', 'meta.interval': "pod'lar her {n} sn test eder",
     'dlg.cancel': 'Vazgeç', 'dlg.save': 'Kaydet', 'err.login': 'Giriş gerekli',
@@ -160,7 +160,7 @@ const I18N = {
 
     'tab.monitor': 'Monitor', 'tab.defs': 'Definitions',
     'search.placeholder': 'Application, key, team, version, network',
-    'onlyProblems': 'Problems only', 'runNow': 'Test now', 'logout': 'Log out', 'logout.title': 'Sign out',
+    'onlyProblems': 'Problems only', 'runNow': 'Test now', 'runNow.title': 'Pods already test on every interval by themselves. Use this right after a fix to see the result without waiting: pods test again within 10 seconds.', 'logout': 'Log out', 'logout.title': 'Sign out',
     'lang.title': 'Dil / Language',
     'meta.updated': 'updated {t}', 'meta.interval': 'pods test every {n} s',
     'dlg.cancel': 'Cancel', 'dlg.save': 'Save', 'err.login': 'Login required',

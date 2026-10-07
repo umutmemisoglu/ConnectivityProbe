@@ -833,7 +833,6 @@ function renderBillboard(all) {
         <div class="bb-kicker"><i class="live ok"></i>${esc(t('bb.live'))}</div>
         <h1 class="bb-title">${esc(t('bb.allUp'))}</h1>
         <p class="bb-desc">${esc(t('bb.allUpDesc', { all: all.length, ok: n('healthy'), wait, n: snap.intervalSeconds }))}</p>
-        <div class="bb-actions"><button class="nf-btn white" data-run>${ICON_PLAY}${esc(t('runNow'))}</button></div>
       </div>${stats}`;
     return;
   }
@@ -850,7 +849,6 @@ function renderBillboard(all) {
       ${message ? `<p class="bb-desc">${esc(message)}</p>` : ''}
       <div class="bb-actions">
         <button class="nf-btn white" data-open-app="${esc(feat.appId)}">${ICON_PLAY}${esc(t('bb.details'))}</button>
-        <button class="nf-btn gray" data-run>${ICON_INFO}${esc(t('runNow'))}</button>
         ${resetButton(feat)}
       </div>
     </div>${stats}`;
@@ -858,7 +856,6 @@ function renderBillboard(all) {
 
 const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v16a1 1 0 0 0 1.5.86l13-8a1 1 0 0 0 0-1.72l-13-8A1 1 0 0 0 6 4Z"/></svg>';
 const ICON_RESET = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 1-7.75 10h2.08A6 6 0 1 0 12 6c-1.66 0-3.15.67-4.24 1.76L10 10H4V4l2.35 2.35A7.97 7.97 0 0 1 12 4Z"/></svg>';
-const ICON_INFO = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm1 7v6h-2v-6h2Zm-1-4a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 12 7Z"/></svg>';
 
 function renderMonitor() {
   const all = snap?.apps ?? [];
@@ -955,7 +952,7 @@ function renderDetail() {
         <div class="m-kicker">${esc([unit?.name, team?.name].filter(Boolean).join(' · ') || t('m.unassigned'))}</div>
         <h2>${esc(s.name)}</h2>
         <div class="m-actions">
-          <button class="nf-btn white" data-run>${ICON_PLAY}${esc(t('runNow'))}</button>
+          <button class="nf-btn gray" data-run title="${esc(t('runNow.title'))}">${ICON_PLAY}${esc(t('runNow'))}</button>
           ${resetButton(s)}
         </div>
       </div>
@@ -1306,15 +1303,15 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 }));
 document.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => changeLang(b.dataset.lang)));
 
-// Testi hemen başlatır (üst menü, billboard ve detay penceresindeki düğmeler).
+// Testi hemen başlatır (detay sayfasındaki düğme). Pod'lar zaten her test aralığında kendiliğinden test eder; bu yalnızca
+// bir düzeltmeden (firewall, sertifika...) hemen sonra sonucu beklemeden görmek içindir.
 async function runNow() {
-  const buttons = document.querySelectorAll('#runNow, [data-run]');
+  const buttons = document.querySelectorAll('[data-run]');
   buttons.forEach((b) => { b.disabled = true; });
   try { await api('POST', '/api/monitor/run'); } catch (err) { alert(err.message); }
-  setTimeout(() => document.querySelectorAll('#runNow, [data-run]').forEach((b) => { b.disabled = false; }), 1500);
+  setTimeout(() => document.querySelectorAll('[data-run]').forEach((b) => { b.disabled = false; }), 1500);
   setTimeout(refreshMonitor, 1000);
 }
-$('#runNow').addEventListener('click', runNow);
 
 // Monitör ekranı ve detay sayfasındaki tüm tıklamalar.
 document.addEventListener('click', async (e) => {
