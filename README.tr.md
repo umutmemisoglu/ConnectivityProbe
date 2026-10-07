@@ -386,6 +386,31 @@ için ayrı bir Monitor çalıştırın. Arayüz **Türkçe ve İngilizce** kull
   uygulamayı bir ekibin üzerine sürükleyerek taşıyın. Bir bağlantı kayıtlı başka bir uygulamayı gösterebilir
   ("hedef uygulama"); bu, matriste görünür.
 
+**Teams bildirimleri**
+
+Her uygulama, kişilerden bağımsız olarak **hangi durumlarda bildirim gönderileceğini** kendisi belirler (Tanımlar →
+uygulama kartı → 🔔 Bildirimler). Kurallar arayüzde kategorili ve açıklamalıdır:
+
+| Kategori | Kurallar (✔ = uygulama ilk kaydolduğunda işaretli) |
+|---|---|
+| Uygulama ve pod'lar | ✔ Uygulamaya erişilemiyor · ✔ Pod eksik · ✔ Sürekli yeniden başlama · Pod yeniden başladı |
+| Bağlantılar | ✔ Bağlantı koptu · ✔ Bağlantı kısmen koptu · Bağlantı yavaşladı · Hedefin IP adresi değişti |
+| Sertifika | ✔ Sertifika bitmek üzere (14 / 7 / 3 / 1 gün) · ✔ Sertifika geçersiz / süresi doldu |
+| Kaynaklar | ✔ Bellek limite yakın · CPU limiti yüzünden yavaşlama · Port tükeniyor |
+| Sürüm / deploy | Yeni sürüm yayına alındı · Deploy takıldı |
+| Seçenekler | ✔ Düzelince de haber ver |
+
+Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası). İlk seferde adını ve
+Teams'teki **Workflows** iş akışının ("Send webhook alerts to a chat", Flow bot ile sohbet) adresini girer; adımlar ekranda
+anlatılır, bir deneme mesajı gönderilir ve tarayıcı kişiyi hatırlar. Sonrasında her uygulamada "Bana haber ver" tek tıktır.
+Azure / Entra kaydı veya yönetici onayı gerekmez. Adres gizli tutulur.
+
+Bildirimler rahatsız etmeyecek şekilde tasarlandı: bir durum **ancak doğrulandıktan sonra** bildirilir (ör. üst üste 3
+başarısız test, bellek 5 dakika boyunca yüksek); olay başına **bir kez**; bir uygulamanın aynı turdaki tüm gelişmeleri
+**tek mesajda**; sürekli açılıp kapanan bir durum için tek bir "kararsız" mesajı; deploy'dan kaynaklanan yeniden başlamalar
+bildirilmez; açık olaylar Monitor yeniden başlasa da unutulmaz (`data/notify-state.json`). Monitor'ün Teams'e dışarı
+doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır).
+
 **Pod durumları**
 
 | Durum | Anlamı |
