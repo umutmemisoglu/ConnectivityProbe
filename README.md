@@ -31,7 +31,8 @@ one screen.
 - [Installation by platform](#installation-by-platform)
 - [The app key](#the-app-key)
 - [Versions and builds](#versions-and-builds)
-- [Clusters](#clusters)
+- [Clusters (networks)](#clusters-networks)
+- [Resources, TLS and latency](#resources-tls-and-latency-21)
 - [Console messages](#console-messages)
 - [Options](#options)
 - [Security](#security)
@@ -47,7 +48,7 @@ one screen.
 application starts ──►  ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)
 
 every 10 s   ──►  POST {MonitorUrl}/api/agent/v2/report     (header X-ConnectivityProbe-AppKey)
-                  "I am pod X of app <key>, version 1.4.0, cluster C"
+                  "I am pod X of app <key>, version 1.4.0, IP 10.42.1.15"
                   ◄── connection list + test interval
 every 30 s   ──►  test every connection from inside this pod (TCP)
                   └─► results go with the next report, immediately
@@ -239,21 +240,72 @@ Every pod reports the version of **your application**, not of ConnectivityProbe.
   with the same version but a different build were built separately.
 - **Build date:** the date of the assembly file.
 
-The Monitor shows the version on every card and in the **Versions** tab, and highlights pods that run a different
-version or build than the rest (for example during a rollout, or when a deploy only reached one cluster).
+The Monitor shows the version on every card and, in the application's details window, a versions × networks table. Pods
+that run a different version or build than the rest are highlighted (for example during a rollout, or when a deploy only
+reached one cluster).
 
 ---
 
-## Clusters
+## Clusters (networks)
 
-The Monitor groups pods by cluster **automatically**:
+The Monitor groups pods by network **automatically** and names each group after it:
 
-- **Kubernetes:** every pod has its cluster's CA certificate at
-  `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`. The library sends a fingerprint of it (SHA-256, never the
-  certificate itself), so all pods of the same cluster get the same cluster id. The namespace is read from the same folder.
-- **Outside Kubernetes** (IIS, VMs): pods are grouped by the network address their reports come from.
+```
+orders-a1 → 10.42.1.15 ┐
+orders-a2 → 10.42.1.16 ├─ 10.42.0.0/16   (3 pods)
+orders-a3 → 10.42.2.17 ┘
+orders-b1 → 10.43.1.21 ┐
+orders-b2 → 10.43.1.22 ┘─ 10.43.0.0/16   (2 pods)
+```
 
-New clusters appear as "Cluster 1", "Cluster 2", … and can be renamed in the **Versions** tab (e.g. "Prod Istanbul").
+- **Pod address (2.1+):** `POD_IP` (Kubernetes Downward API) if set; otherwise the local address the pod uses to reach the
+  Monitor; otherwise the first IPv4 address of the machine name.
+- **Network:** IPv4 `/16` (Kubernetes gives each cluster its own pod network and each node a `/24` of it, so all nodes of a
+  cluster fall into the same `/16`), IPv6 `/64`.
+- **Kubernetes:** pods are also told apart by a fingerprint of the cluster's CA certificate
+  (`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`; SHA-256, never the certificate itself). So two clusters that use
+  the same pod network (e.g. both the default `10.42.0.0/16`) are still two groups, shown as `10.42.0.0/16 · e88c3c`.
+  The namespace is read from the same folder.
+
+A network can be given a name in the details window (✎ next to it, e.g. "Prod Istanbul"); leave it empty to go back to the
+network address.
+
+---
+
+## Resources, TLS and latency (2.1+)
+
+With every report (every 10 s) the pod also sends its **resource usage**:
+
+| | Everywhere | In a Linux container (Kubernetes, Docker) |
+|---|---|---|
+| CPU | cores used by the process | **CPU limit** and **throttling** (% of periods slowed down by the limit) |
+| Memory | working set, private bytes, GC heap, GC counts | **memory usage and limit**, **OOM kills** |
+| Threads | threads, busy thread-pool workers, handles | |
+| Network | | bytes in / out (`/proc/net/dev`) |
+| TCP sockets | | established, TIME_WAIT, local port range (port exhaustion) |
+
+The Monitor also detects **restarts** (same pod, new process). Nothing is configured; values that cannot be read on a
+platform stay empty, and reading them never throws.
+
+For every connection, in addition to the TCP test:
+
+- **DNS time** is measured separately, and a **new IP address** for the name (DNS change, failover) is marked. Round-robin
+  DNS does not cause false alarms: addresses seen before are remembered.
+- **Slow** connections are marked: the last 3 measurements are 3× slower (and ≥ 50 ms slower) than usual.
+- **TLS / certificate check:** automatic for `https://` and ports 443, 8443, 636, 993, 995, 465, 5671 (or set to on / off per
+  connection). After the TCP connection the pod performs a TLS handshake and reports protocol, subject, issuer, **expiry
+  date** and certificate errors (untrusted, name mismatch, expired). An invalid certificate counts as a failed test.
+
+**Alerts** (thresholds in `Monitor:Alerts`):
+
+| Alert | Default | Effect |
+|---|---|---|
+| Memory ≥ % of the container limit | 90 | degraded |
+| Restart or OOM kill within the last N minutes | 60 | degraded |
+| TCP sockets ≥ % of the local port range | 70 | degraded |
+| Certificate expires within N days | 14 | degraded |
+| CPU throttling ≥ % | 25 | note |
+| Slow connection, changed IP | – | note |
 
 ---
 
@@ -301,7 +353,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 
 - The library opens **no port and no endpoint**. It only makes outbound HTTP(S) requests to `MonitorUrl`.
 - It sends: pod name, machine name, process id, IP addresses, OS / .NET version, application name / version / build,
-  cluster fingerprint, namespace and only these environment variables: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
+  cluster fingerprint, namespace, resource figures (CPU, memory, threads, TCP socket counts, network byte counters),
+  test results (for TLS connections the server certificate's subject, issuer and dates) and only these environment variables: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. No other variable is ever read.
 - The pod tests only the connections that are attached to its application in the Monitor.
 - The Monitor is meant for internal networks: registration is open, and the app key identifies the application but is
@@ -316,18 +369,24 @@ dotnet run --project src/ConnectivityProbe.Monitor
 ```
 
 Default address: http://localhost:5087/ . The Monitor is a standalone application, not a NuGet package. Run one Monitor per
-environment (test, prod).
+environment (test, prod). The UI is available in **Turkish and English** (TR / EN switch in the top bar).
 
 **Screens**
 
 - **Monitor:** the most critical application in a large banner, then a "Needs attention" row and one horizontally
   scrolling row per team. Each card shows its state, pod count, connection summary and version. Search by application,
-  key, team, version, cluster or pod name.
-- **Details window:** pods grouped by cluster (name, IPs, version, build, namespace, last report), a connection × pod
-  matrix (which pod cannot reach a target, and since when), history and *Reset pod list*.
-- **Versions:** clusters (renamable) and an applications × clusters table with the versions running in each cluster.
-- **Definitions:** Units → Teams → Applications. Each team has its own connection pool; a common pool is shared by
-  everyone. Drag a connection onto an application to attach it. A connection can point to another registered
+  key, team, version, network or pod name.
+- **Details page** (opens in a new browser tab, `/?app=<id>`):
+  - **Versions:** which version / build runs on how many pods in each network.
+  - **Connections:** a connection × pod matrix with the pods grouped under their network, so a target that only one
+    cluster cannot reach stands out (which pod, since when). Each cell also shows DNS time, TLS result / days to
+    certificate expiry and a "slow" mark.
+  - **Resources:** CPU, memory (with limit), throttling, threads, TCP sockets, network rate and restarts per pod, with
+    ~10-minute charts.
+  - **Pods** grouped by network (name, IP, version, build, namespace, last report), history and *Reset pod list*.
+- **Definitions:** one connection pool for everything, independent of units and teams, with ranked search (typos and
+  missing Turkish characters are tolerated). Units → Teams → Applications on the right; drag a connection onto an
+  application to attach it, drag an application onto a team to move it. A connection can point to another registered
   application ("target application"), which is shown in the matrix.
 
 **Pod states**
@@ -347,6 +406,7 @@ environment (test, prod).
 | `IntervalSeconds` | 30 | Test interval sent to the pods. |
 | `ProbeTimeoutMs` | 5000 | Connection timeout sent to the pods. |
 | `MissingAfterCycles` | 3 | Test intervals without a report before a pod is "missing". |
+| `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Alert thresholds (see [Resources, TLS and latency](#resources-tls-and-latency-21)). |
 | `DataFile` | `data/definitions.json` | Definitions. Pod state (`pod-state.json`) and login keys (`keys/`) are kept next to it. |
 
 If a reverse proxy runs on the same machine, every request looks like localhost, so always set `AdminPassword`.
@@ -380,7 +440,8 @@ Steps:
 
 | Version | Highlights |
 |---|---|
-| **2.0.0** | One line: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Automatic registration, application version / build per pod, automatic cluster grouping, no endpoints, no dependencies. |
+| **2.1.0** | Pod resources (CPU, memory and limits, throttling, OOM, threads, TCP sockets), TLS / certificate checks, DNS time, slow-connection and restart detection. Pods report their own IP address (`POD_IP` or the route to the Monitor); the Monitor names clusters after the pod network (e.g. `10.42.0.0/16`). Monitor: versions and network grouping in the details window, Turkish / English UI. |
+| 2.0.0 | One line: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Automatic registration, application version / build per pod, automatic cluster grouping, no endpoints, no dependencies. |
 | 1.1.0 | Strict mode: pods pull their definitions with an app key, test from inside and report back. |
 | 1.0.0 | First release: `discover` and `identity` endpoints. |
 

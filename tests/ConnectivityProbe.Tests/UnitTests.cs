@@ -142,11 +142,182 @@ public class IdentityTests
     }
 
     [Fact]
+    public void Primary_address_prefers_pod_ip_then_falls_back_without_throwing()
+    {
+        Environment.SetEnvironmentVariable("POD_IP", "10.42.1.15");
+        try { Assert.Equal("10.42.1.15", PodIdentityBuilder.ResolvePrimaryAddress("monitor.example.invalid", 443, new List<string>())); }
+        finally { Environment.SetEnvironmentVariable("POD_IP", null); }
+
+        // Monitor aynı makinede (loopback) veya çözülemiyor: makine adresine düşer, hata fırlatmaz.
+        var fallback = PodIdentityBuilder.ResolvePrimaryAddress("localhost", 5087, new List<string> { "192.0.2.10" });
+        Assert.NotNull(fallback);
+        Assert.False(System.Net.IPAddress.IsLoopback(System.Net.IPAddress.Parse(fallback!)));
+        Assert.NotNull(PodIdentityBuilder.ResolvePrimaryAddress("does-not-exist.invalid", 80, new List<string> { "192.0.2.10" }));
+    }
+
+    [Fact]
     public void Version_is_a_package_version() => Assert.Matches(@"^\d+\.\d+\.\d+", ProbeInfo.Version);
+}
+
+// Ortam değişkeni (cgroup / proc klasörü) değiştirdiği için AgentTests ile aynı anda çalışmaz.
+[Collection("environment")]
+public class ResourceSamplerTests
+{
+    [Fact]
+    public void Reads_container_limits_throttling_oom_network_and_tcp_sockets()
+    {
+        // Kubernetes container'ını taklit eden cgroup v2 ve /proc klasörleri.
+        var cg = Directory.CreateTempSubdirectory().FullName;
+        File.WriteAllText(Path.Combine(cg, "cgroup.controllers"), "cpu memory");
+        File.WriteAllText(Path.Combine(cg, "memory.current"), "471859200\n");      // 450 MB
+        File.WriteAllText(Path.Combine(cg, "memory.max"), "536870912\n");          // 512 MB
+        File.WriteAllText(Path.Combine(cg, "memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\n");
+        File.WriteAllText(Path.Combine(cg, "cpu.max"), "150000 100000\n");         // 1,5 çekirdek
+        File.WriteAllText(Path.Combine(cg, "cpu.stat"), "usage_usec 100\nnr_periods 100\nnr_throttled 10\nthrottled_usec 5\n");
+
+        var proc = Directory.CreateTempSubdirectory().FullName;
+        Directory.CreateDirectory(Path.Combine(proc, "net"));
+        Directory.CreateDirectory(Path.Combine(proc, "sys", "net", "ipv4"));
+        File.WriteAllText(Path.Combine(proc, "net", "dev"),
+            "Inter-|   Receive |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets\n" +
+            "    lo: 999 1 0 0 0 0 0 0 999 1 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 2000 20 0 0 0 0 0 0\n");
+        File.WriteAllText(Path.Combine(proc, "net", "tcp"),
+            "  sl  local_address rem_address   st tx_queue rx_queue\n" +
+            "   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000\n" +
+            "   1: 0F012A0A:9C40 3702A8C0:0599 01 00000000:00000000\n" +
+            "   2: 0F012A0A:9C41 3702A8C0:0599 06 00000000:00000000\n" +
+            "   3: 0F012A0A:9C42 3702A8C0:0599 06 00000000:00000000\n");
+        File.WriteAllText(Path.Combine(proc, "sys", "net", "ipv4", "ip_local_port_range"), "32768\t60999\n");
+
+        Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_CGROUP_DIR", cg);
+        Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_PROC_DIR", proc);
+        try
+        {
+            var sampler = new ResourceSampler();
+            var first = sampler.Sample();
+            Assert.Equal(471859200, first.MemoryBytes);
+            Assert.Equal(536870912, first.MemoryLimitBytes);
+            Assert.Equal(1, first.OomKills);
+            Assert.Equal(1.5, first.CpuLimitCores);
+            Assert.Null(first.CpuThrottledPercent);          // ilk ölçümde fark yok
+            Assert.Null(first.CpuCores);
+            Assert.Equal(1000, first.NetRxBytes);            // loopback sayılmaz
+            Assert.Equal(2000, first.NetTxBytes);
+            Assert.Equal(1, first.TcpEstablished);
+            Assert.Equal(2, first.TcpTimeWait);
+            Assert.Equal(4, first.TcpTotal);
+            Assert.Equal(28232, first.EphemeralPorts);
+            Assert.True(first.WorkingSetBytes > 0);
+            Assert.True(first.Threads > 0);
+
+            // İkinci ölçüm: 200 dönemin 60'ında throttling -> %30.
+            File.WriteAllText(Path.Combine(cg, "cpu.stat"), "nr_periods 300\nnr_throttled 70\n");
+            var second = sampler.Sample();
+            Assert.Equal(30.0, second.CpuThrottledPercent);
+            Assert.NotNull(second.CpuCores);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_CGROUP_DIR", null);
+            Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_PROC_DIR", null);
+        }
+    }
+
+    [Fact]
+    public void Missing_files_and_unlimited_values_are_null_not_errors()
+    {
+        var cg = Directory.CreateTempSubdirectory().FullName;
+        File.WriteAllText(Path.Combine(cg, "cgroup.controllers"), "");
+        File.WriteAllText(Path.Combine(cg, "memory.max"), "max\n");
+        File.WriteAllText(Path.Combine(cg, "cpu.max"), "max 100000\n");
+        Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_CGROUP_DIR", cg);
+        Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_PROC_DIR", Path.Combine(cg, "yok"));
+        try
+        {
+            var s = new ResourceSampler().Sample();
+            Assert.Null(s.MemoryLimitBytes);
+            Assert.Null(s.CpuLimitCores);
+            Assert.Null(s.TcpTotal);
+            Assert.Null(s.NetRxBytes);
+            Assert.True(s.ProcessorCount > 0);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_CGROUP_DIR", null);
+            Environment.SetEnvironmentVariable("CONNECTIVITYPROBE_PROC_DIR", null);
+        }
+    }
+}
+
+public class TlsProbeTests
+{
+    [Fact]
+    public async Task Reads_the_certificate_and_reports_an_untrusted_one()
+    {
+        // Kendinden imzalı sertifikayla küçük bir TLS sunucusu.
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var req = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=localhost", rsa,
+            System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        var notAfter = DateTimeOffset.UtcNow.AddDays(10);
+        using var created = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), notAfter);
+        // Sunucu tarafında Windows özel anahtarı kalıcı bir sertifikadan okuyabilsin diye PFX'e çevirip yeniden yüklüyoruz.
+        using var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(
+            created.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx));
+
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            using var ssl = new System.Net.Security.SslStream(client.GetStream());
+            try { await ssl.AuthenticateAsServerAsync(cert); await Task.Delay(500); } catch { /* istemci kapattı */ }
+        });
+
+        try
+        {
+            var report = await TlsProbe.ProbeAsync("localhost", port, TimeSpan.FromSeconds(5));
+            Assert.True(report.Handshake, report.Error);
+            Assert.False(report.Success);                                   // güvenilir bir CA tarafından imzalanmamış
+            Assert.Contains("RemoteCertificateChainErrors", report.CertificateErrors);
+            Assert.Equal("CN=localhost", report.Subject);
+            Assert.Equal(notAfter.UtcDateTime, report.NotAfterUtc!.Value, TimeSpan.FromSeconds(1));
+            Assert.NotNull(report.Protocol);
+        }
+        finally
+        {
+            listener.Stop();
+            await server;
+        }
+    }
+
+    [Fact]
+    public async Task Plain_tcp_port_fails_the_handshake_without_throwing()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            var report = await TlsProbe.ProbeAsync("127.0.0.1", port, TimeSpan.FromSeconds(1));
+            Assert.False(report.Handshake);
+            Assert.False(report.Success);
+            Assert.False(string.IsNullOrEmpty(report.Error));
+        }
+        finally { listener.Stop(); }
+    }
 }
 
 public class TcpProbeTests
 {
+    [Fact]
+    public async Task Hostname_resolution_time_is_measured()
+    {
+        var report = await TcpProbe.ProbeAllAsync("localhost", 1, 1, TimeSpan.FromSeconds(2), TimeSpan.Zero);
+        Assert.NotNull(report.DnsMs);
+        Assert.Null((await TcpProbe.ProbeAllAsync("127.0.0.1", 1, 1, TimeSpan.FromSeconds(2), TimeSpan.Zero)).DnsMs);
+    }
+
     [Fact]
     public async Task Open_port_succeeds_and_reports_address()
     {

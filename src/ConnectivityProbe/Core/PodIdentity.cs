@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Reflection;
@@ -22,6 +23,11 @@ namespace ConnectivityProbe
         /// <summary>Sürecin başlangıç zamanı (restart olunca değişir).</summary>
         public DateTime StartedAtUtc { get; set; }
         public List<string> LocalAddresses { get; set; } = new List<string>();
+        /// <summary>
+        /// Pod'un asıl IP adresi: Monitor'e giderken kullanılan yerel adres (Kubernetes'te pod IP'si). Monitor pod'ları bu adresin
+        /// ağına göre gruplar ve cluster'ı bu ağla adlandırır (ör. 10.42.0.0/16).
+        /// </summary>
+        public string? PrimaryAddress { get; set; }
         public string Os { get; set; } = "";
         public string Framework { get; set; } = "";
         /// <summary>ConnectivityProbe kütüphanesinin sürümü.</summary>
@@ -224,6 +230,53 @@ namespace ConnectivityProbe
 
         private static string Hex(byte[] bytes, int count) =>
             string.Concat(bytes.Take(count).Select(b => b.ToString("x2", CultureInfo.InvariantCulture)));
+
+        /// <summary>
+        /// Pod'un asıl IP adresi. Kubernetes Downward API ile POD_IP verilmişse o kullanılır. Yoksa Monitor'e giden yolun yerel
+        /// adresine bakılır: UDP soketi hedefe "bağlanınca" işletim sistemi yönlendirme tablosundan çıkış adresini seçer (paket
+        /// gönderilmez). Monitor aynı makinedeyse (loopback) veya hedef çözülemezse makine adının DNS kaydındaki ilk IPv4 adresi,
+        /// o da yoksa arayüzlerdeki ilk adres kullanılır.
+        /// </summary>
+        internal static string? ResolvePrimaryAddress(string? monitorHost, int monitorPort, IList<string> localAddresses)
+        {
+            var podIp = System.Environment.GetEnvironmentVariable("POD_IP")?.Trim();
+            if (!string.IsNullOrEmpty(podIp) && IPAddress.TryParse(podIp, out _)) return podIp;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(monitorHost))
+                {
+                    var target = Dns.GetHostAddresses(monitorHost)
+                        .OrderBy(a => a.AddressFamily == AddressFamily.InterNetwork ? 0 : 1).FirstOrDefault();
+                    if (target != null && !IPAddress.IsLoopback(target))
+                    {
+                        using (var socket = new Socket(target.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                        {
+                            socket.Connect(target, monitorPort);
+                            var local = ((IPEndPoint)socket.LocalEndPoint).Address;
+                            if (!IPAddress.IsLoopback(local) && !local.Equals(IPAddress.Any) && !local.Equals(IPAddress.IPv6Any))
+                                return local.ToString();
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // ağ yok veya ad çözülemedi: aşağıdaki yedeklere geçilir
+            }
+
+            try
+            {
+                var own = Dns.GetHostAddresses(Dns.GetHostName())
+                    .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a));
+                if (own != null) return own.ToString();
+            }
+            catch (Exception)
+            {
+                // makine adı DNS'te yok
+            }
+            return localAddresses.FirstOrDefault();
+        }
 
         // Pod'un aktif ağ arayüzlerindeki IP adresleri; loopback ve link-local IPv6 hariç.
         private static List<string> GetLocalAddresses()

@@ -66,7 +66,12 @@ internal sealed class FakeMonitor : IAsyncDisposable
     }
 }
 
+// Ortam değişkenlerini (service account, cgroup, proc klasörü) değiştiren test sınıfları sırayla çalışır.
+[CollectionDefinition("environment", DisableParallelization = true)]
+public class EnvironmentCollection { }
+
 // Agent süreç başına tek olduğu ve konsol çıktısı yakalandığı için bu sınıftaki testler sırayla çalışır.
+[Collection("environment")]
 public class AgentTests
 {
     private static async Task<T> WaitFor<T>(Func<T?> probe, TimeSpan timeout) where T : class
@@ -138,8 +143,9 @@ public class AgentTests
         await using var monitor = await FakeMonitor.StartAsync();
         monitor.Connections = new object[]
         {
-            new { id = "db", name = "db", host = "127.0.0.1", port = targetPort },
-            new { id = "bad", name = "bad", host = "", port = (int?)null },
+            new { id = "db", name = "db", host = "127.0.0.1", port = targetPort, tls = false },
+            new { id = "bad", name = "bad", host = "", port = (int?)null, tls = false },
+            new { id = "tls", name = "tls", host = "127.0.0.1", port = targetPort, tls = true },  // TLS konuşmayan port
         };
 
         using var console = new ConsoleCapture();
@@ -168,6 +174,11 @@ public class AgentTests
             Assert.True(results["db"].Tcp!.HostnameAttempts.Single().Success, results["db"].Tcp!.HostnameAttempts.Single().Error);
             Assert.Null(results["bad"].Tcp);
             Assert.Contains("Invalid target", results["bad"].Error);
+            Assert.Null(results["db"].Tls);                                     // TLS istenmedi
+            Assert.False(results["tls"].Tls!.Handshake);                        // istendi; port TLS konuşmuyor
+            Assert.NotNull(report.Resources);                                   // kaynak ölçümleri her bildirimde
+            Assert.True(report.Resources!.WorkingSetBytes > 0);
+            Assert.NotNull(report.Pod.PrimaryAddress);
             Assert.Equal("id-orders-api", agent!.AppId);
             Assert.Contains("[ConnectivityProbe] Registered to monitor", console.Text);
 

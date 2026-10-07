@@ -1,5 +1,69 @@
 # Changelog / Değişiklik geçmişi
 
+## 2.1.0
+
+### English
+
+**Pod resources, TLS certificates, DNS / latency, and clusters named after the pod network.**
+
+- **Resources:** every report now carries the pod's resource usage (`AgentReport.Resources`): CPU (cores), memory
+  (working set, GC heap, GC counts), threads and thread pool, handles; in a Linux container also the cgroup **CPU and
+  memory limits, CPU throttling, OOM kills**, network bytes (`/proc/net/dev`) and TCP sockets (established, TIME_WAIT,
+  local port range). Values that cannot be read on a platform stay empty; nothing ever throws.
+- **TLS / certificate check:** for connections the Monitor marks as TLS (automatic for `https://` and ports 443, 8443,
+  636, 993, 995, 465, 5671), the pod performs a TLS handshake after the TCP test and reports protocol, subject, issuer,
+  expiry date and certificate errors (`AgentResult.Tls`).
+- **DNS time** is measured separately (`ProbeReport.DnsMs`).
+- Every pod now reports its own IP address (`PodIdentity.PrimaryAddress`): `POD_IP` (Kubernetes Downward API) if set,
+  otherwise the local address used to reach the Monitor, otherwise the first IPv4 address of the machine name.
+- ConnectivityProbe Monitor groups pods by that address's network (IPv4 `/16`, IPv6 `/64`) and names the group after it,
+  e.g. `10.42.0.0/16`, instead of "Cluster 1". In Kubernetes the cluster CA fingerprint still separates two clusters that
+  use the same pod network.
+- Monitor UI: the separate Versions tab is gone. The application's details window shows a versions × networks table, the
+  connection matrix with pods grouped by network, and the pods grouped by network (renamable). The whole UI is available
+  in Turkish and English. Clicking an application opens its details in a new browser tab (`/?app=<id>`).
+- Monitor: new **Resources** table (CPU, memory with limit, throttling, threads, TCP sockets, network rate, restarts, with
+  ~10-minute charts); TLS result and days to certificate expiry in the connection matrix; slow connections (3× slower than
+  usual) and changed DNS addresses are marked. Pod restarts (same pod, new process) are detected.
+- Monitor alerts (`Monitor:Alerts`): memory ≥ 90 % of the limit, restart or OOM kill in the last 60 minutes, TCP sockets ≥
+  70 % of the local port range, certificate expiring within 14 days → application "degraded"; CPU throttling ≥ 25 %, slow
+  connections and changed IPs are shown as notes.
+- Monitor definitions: one connection pool, independent of units and teams (team pools are merged into it; every
+  connection can be attached to every application), ranked search in the pool, usage count and status per connection,
+  applications moved between teams by drag and drop.
+- No breaking API change; 2.0 pods keep working (without resource and TLS data).
+
+### Türkçe
+
+**Pod kaynakları, TLS sertifikaları, DNS / gecikme ve pod ağıyla adlandırılan cluster'lar.**
+
+- **Kaynaklar:** her bildirim artık pod'un kaynak kullanımını taşır (`AgentReport.Resources`): CPU (çekirdek), bellek
+  (working set, GC heap, GC sayıları), thread'ler ve thread pool, handle'lar; Linux container'da ayrıca cgroup **CPU ve
+  bellek limitleri, CPU throttling, OOM kill**, ağ trafiği (`/proc/net/dev`) ve TCP soketleri (kurulu, TIME_WAIT, yerel port
+  aralığı). Bir platformda okunamayan değerler boş kalır; hiçbir koşulda hata fırlatılmaz.
+- **TLS / sertifika kontrolü:** Monitor'ün TLS olarak işaretlediği bağlantılarda (`https://` ve 443, 8443, 636, 993, 995,
+  465, 5671 portlarında otomatik) pod TCP testinden sonra TLS el sıkışması yapar; protokol, sertifika sahibi, veren, bitiş
+  tarihi ve sertifika hatalarını bildirir (`AgentResult.Tls`).
+- **DNS süresi** ayrıca ölçülür (`ProbeReport.DnsMs`).
+- Her pod artık kendi IP adresini bildirir (`PodIdentity.PrimaryAddress`): `POD_IP` (Kubernetes Downward API) verilmişse
+  o, yoksa Monitor'e giderken kullanılan yerel adres, o da yoksa makine adının ilk IPv4 adresi.
+- ConnectivityProbe Monitor pod'ları bu adresin ağına göre (IPv4 `/16`, IPv6 `/64`) gruplar ve grubu "Cluster 1" yerine
+  ağın adıyla gösterir, ör. `10.42.0.0/16`. Kubernetes'te aynı pod ağını kullanan iki cluster yine CA parmak iziyle ayrılır.
+- Monitor arayüzü: ayrı Sürümler sekmesi kalktı. Uygulamanın detay penceresinde sürümler × ağlar tablosu, pod'ların ağa göre
+  gruplandığı bağlantı matrisi ve ağa göre gruplanmış pod'lar (ad verilebilir) bulunur. Arayüzün tamamı Türkçe ve
+  İngilizce kullanılabilir. Uygulamaya tıklayınca ayrıntıları yeni tarayıcı sekmesinde açılır (`/?app=<kimlik>`).
+- Monitor: yeni **Kaynaklar** tablosu (CPU, limitle birlikte bellek, throttling, thread'ler, TCP soketleri, ağ hızı,
+  yeniden başlamalar; ~10 dakikalık grafiklerle); bağlantı matrisinde TLS sonucu ve sertifikanın bitişine kalan gün;
+  yavaşlayan bağlantılar (olağanın 3 katı) ve değişen DNS adresleri işaretlenir. Pod'un yeniden başlaması (aynı pod, yeni
+  süreç) tespit edilir.
+- Monitor uyarıları (`Monitor:Alerts`): bellek limitin %90'ı, son 60 dakikada yeniden başlama veya OOM kill, TCP soketleri
+  yerel port aralığının %70'i, sertifika bitişine 14 gün → uygulama "sorunlu"; CPU throttling %25, yavaş bağlantılar ve
+  değişen IP'ler not olarak gösterilir.
+- Monitor tanımları: birim ve ekiplerden bağımsız tek bağlantı havuzu (ekip havuzları buna katılır; her bağlantı her
+  uygulamaya atanabilir), havuzda alaka sıralı arama, bağlantı başına kullanım sayısı ve durum, uygulamaların ekipler arasında
+  sürükle-bırak ile taşınması.
+- Kıran API değişikliği yok; 2.0 pod'ları çalışmaya devam eder (kaynak ve TLS bilgisi olmadan).
+
 ## 2.0.0
 
 ### English

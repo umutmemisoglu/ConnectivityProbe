@@ -22,6 +22,8 @@ namespace ConnectivityProbe
         public int PollSeconds { get; set; }
         /// <summary>Son test turunun sonuçları; bu bildirimde test sonucu yoksa null.</summary>
         public AgentRun? Run { get; set; }
+        /// <summary>Pod'un kaynak kullanımı (CPU, bellek, container limitleri, thread'ler, TCP soketleri).</summary>
+        public ResourceSample? Resources { get; set; }
     }
 
     /// <summary>Bir pod'un bir test turu.</summary>
@@ -38,6 +40,8 @@ namespace ConnectivityProbe
         public string ConnectionId { get; set; } = "";
         /// <summary>Telnet raporu: ismin çözüldüğü her IP ve isim üzerinden yapılan bağlantının sonucu.</summary>
         public ProbeReport? Tcp { get; set; }
+        /// <summary>TLS kontrolü (Monitor bu bağlantı için istediyse ve TCP başarılıysa): el sıkışma ve sertifika.</summary>
+        public TlsReport? Tls { get; set; }
         /// <summary>Test yapılamadıysa nedeni (ör. tanımdaki host geçersiz).</summary>
         public string? Error { get; set; }
     }
@@ -292,6 +296,10 @@ namespace ConnectivityProbe
                 var timeout = TimeSpan.FromMilliseconds(Math.Max(500, _options.TimeoutMs > 0 ? _options.TimeoutMs : assignment.TimeoutMs));
                 result.Tcp = await TcpProbe.ProbeAllAsync(host, port, 1, timeout, TimeSpan.Zero, Math.Max(1, _options.MaxAddresses),
                     TimeSpan.FromTicks(timeout.Ticks * 3), ct).ConfigureAwait(false);
+
+                // TLS: port açıksa el sıkışıp sertifikayı okuyoruz (bitiş tarihi, ad uyumu, güven zinciri).
+                if (connection.Tls && result.Tcp.HostnameAttempts.Any(a => a.Success))
+                    result.Tls = await TlsProbe.ProbeAsync(host, port, timeout, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -306,15 +314,33 @@ namespace ConnectivityProbe
 
         // ------------------------------------------------------------------ Monitor ile iletişim
 
+        private readonly ResourceSampler _resources = new ResourceSampler();
+        private string? _primaryAddress;
+        private DateTime _primaryAddressAtUtc;
+
+        // Pod'un asıl IP adresi; ağ yapılandırması nadiren değiştiği için 5 dakikada bir yeniden hesaplanır.
+        private string? PrimaryAddress(IList<string> localAddresses)
+        {
+            if (_primaryAddress == null || DateTime.UtcNow - _primaryAddressAtUtc > TimeSpan.FromMinutes(5))
+            {
+                var uri = new Uri(_options.MonitorUrl);
+                _primaryAddress = PodIdentityBuilder.ResolvePrimaryAddress(uri.DnsSafeHost, uri.Port, localAddresses);
+                _primaryAddressAtUtc = DateTime.UtcNow;
+            }
+            return _primaryAddress;
+        }
+
         private async Task<Assignment> ReportAsync(AgentRun? run, CancellationToken ct)
         {
             var identity = PodIdentityBuilder.Build(_app, _options.AppName);
+            identity.PrimaryAddress = PrimaryAddress(identity.LocalAddresses);
             var report = new AgentReport
             {
                 AppName = identity.AppName,
                 Pod = identity,
                 PollSeconds = Math.Max(1, _options.PollSeconds),
-                Run = run
+                Run = run,
+                Resources = _resources.Sample()
             };
 
             using (var request = NewRequest(ReportPath, Json.Serialize(report)))
@@ -403,7 +429,8 @@ namespace ConnectivityProbe
                     {
                         Id = Json.GetString(c, "id") ?? "",
                         Host = Json.GetString(c, "host") ?? "",
-                        Port = Json.GetDouble(c, "port") is double p ? (int)p : (int?)null
+                        Port = Json.GetDouble(c, "port") is double p ? (int)p : (int?)null,
+                        Tls = Json.GetBool(c, "tls")
                     }).Where(c => c.Id.Length > 0).ToList()
                 };
                 if (Json.GetLong(o, "intervalSeconds") is long interval && interval > 0) a.IntervalSeconds = (int)interval;
@@ -417,6 +444,8 @@ namespace ConnectivityProbe
             public string Id { get; set; } = "";
             public string Host { get; set; } = "";
             public int? Port { get; set; }
+            /// <summary>TCP'ye ek olarak TLS el sıkışması ve sertifika kontrolü yapılsın mı (Monitor belirler).</summary>
+            public bool Tls { get; set; }
         }
     }
 }

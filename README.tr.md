@@ -30,7 +30,8 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 - [Platforma göre kurulum](#platforma-göre-kurulum)
 - [Uygulama anahtarı](#uygulama-anahtarı)
 - [Sürümler ve build'ler](#sürümler-ve-buildler)
-- [Cluster'lar](#clusterlar)
+- [Cluster'lar (ağlar)](#clusterlar-ağlar)
+- [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)
 - [Konsol mesajları](#konsol-mesajları)
 - [Seçenekler](#seçenekler)
 - [Güvenlik](#güvenlik)
@@ -46,7 +47,7 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 uygulama açılır ──►  ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)
 
 her 10 sn     ──►  POST {MonitorUrl}/api/agent/v2/report     (başlık X-ConnectivityProbe-AppKey)
-                   "<anahtar> uygulamasının X pod'uyum, sürüm 1.4.0, cluster C"
+                   "<anahtar> uygulamasının X pod'uyum, sürüm 1.4.0, IP 10.42.1.15"
                    ◄── bağlantı listesi + test aralığı
 her 30 sn     ──►  her bağlantıyı bu pod'un içinden test et (TCP)
                    └─► sonuçlar hemen bir sonraki bildirimle gider
@@ -236,22 +237,71 @@ Her pod, ConnectivityProbe'un değil **sizin uygulamanızın** sürümünü bild
   ama build'i farklı iki pod ayrı ayrı derlenmiştir.
 - **Build tarihi:** assembly dosyasının tarihi.
 
-Monitor sürümü her kartta ve **Sürümler** sekmesinde gösterir; diğerlerinden farklı sürüm veya build çalıştıran pod'ları
-işaretler (ör. rollout sırasında ya da deploy yalnızca bir cluster'a ulaştığında).
+Monitor sürümü her kartta, uygulamanın detay penceresinde de sürümler × ağlar tablosu olarak gösterir. Diğerlerinden farklı
+sürüm veya build çalıştıran pod'lar işaretlenir (ör. rollout sırasında ya da deploy yalnızca bir cluster'a ulaştığında).
 
 ---
 
-## Cluster'lar
+## Cluster'lar (ağlar)
 
-Monitor pod'ları cluster'a göre **kendiliğinden** gruplar:
+Monitor pod'ları ağlarına göre **kendiliğinden** gruplar ve grubu ağın adıyla gösterir:
 
-- **Kubernetes:** her pod'da cluster'ının CA sertifikası `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt` yolunda
-  bulunur. Kütüphane bunun parmak izini gönderir (SHA-256; sertifikanın kendisi asla gönderilmez); aynı cluster'daki tüm
-  pod'lar aynı cluster kimliğini alır. Namespace de aynı klasörden okunur.
-- **Kubernetes dışında** (IIS, sanal makineler): pod'lar bildirimlerinin geldiği ağ adresine göre gruplanır.
+```
+orders-a1 → 10.42.1.15 ┐
+orders-a2 → 10.42.1.16 ├─ 10.42.0.0/16   (3 pod)
+orders-a3 → 10.42.2.17 ┘
+orders-b1 → 10.43.1.21 ┐
+orders-b2 → 10.43.1.22 ┘─ 10.43.0.0/16   (2 pod)
+```
 
-Yeni cluster'lar "Cluster 1", "Cluster 2", … olarak görünür ve **Sürümler** sekmesinde yeniden adlandırılabilir
-(ör. "Prod İstanbul").
+- **Pod adresi (2.1+):** `POD_IP` (Kubernetes Downward API) verilmişse o; yoksa pod'un Monitor'e giderken kullandığı yerel
+  adres; o da yoksa makine adının ilk IPv4 adresi.
+- **Ağ:** IPv4'te `/16` (Kubernetes her cluster'a ayrı bir pod ağı, her node'a da bunun bir `/24`'ünü verir; bir cluster'ın
+  tüm node'ları aynı `/16`'ya düşer), IPv6'da `/64`.
+- **Kubernetes:** pod'lar ayrıca cluster'ın CA sertifikasının parmak iziyle ayrılır
+  (`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`; SHA-256, sertifikanın kendisi asla gönderilmez). Böylece aynı pod
+  ağını kullanan iki cluster (ör. ikisi de varsayılan `10.42.0.0/16`) yine iki ayrı grup olur ve `10.42.0.0/16 · e88c3c`
+  şeklinde gösterilir. Namespace de aynı klasörden okunur.
+
+Ağa detay penceresinde ad verilebilir (yanındaki ✎, ör. "Prod İstanbul"); boş bırakılırsa yeniden ağ adresi gösterilir.
+
+---
+
+## Kaynaklar, TLS ve gecikme (2.1+)
+
+Pod her bildirimde (10 saniyede bir) **kaynak kullanımını** da gönderir:
+
+| | Her yerde | Linux container'da (Kubernetes, Docker) |
+|---|---|---|
+| CPU | sürecin kullandığı çekirdek | **CPU limiti** ve **throttling** (limit yüzünden yavaşlatılan dönemlerin oranı) |
+| Bellek | working set, private bytes, GC heap, GC sayıları | **bellek kullanımı ve limiti**, **OOM kill** |
+| Thread'ler | thread'ler, meşgul thread pool worker'ları, handle'lar | |
+| Ağ | | gelen / giden byte (`/proc/net/dev`) |
+| TCP soketleri | | kurulu, TIME_WAIT, yerel port aralığı (port tükenmesi) |
+
+Monitor ayrıca **yeniden başlamaları** (aynı pod, yeni süreç) tespit eder. Hiçbir ayar gerekmez; bir platformda okunamayan
+değerler boş kalır, okuma hiçbir zaman hata fırlatmaz.
+
+Her bağlantıda TCP testine ek olarak:
+
+- **DNS süresi** ayrıca ölçülür; ad için **yeni bir IP adresi** dönerse (DNS değişikliği, failover) işaretlenir. Round-robin
+  DNS sahte uyarı üretmez: daha önce görülen adresler hatırlanır.
+- **Yavaşlayan** bağlantılar işaretlenir: son 3 ölçüm olağanın 3 katından (ve en az 50 ms) yavaş.
+- **TLS / sertifika kontrolü:** `https://` ve 443, 8443, 636, 993, 995, 465, 5671 portlarında otomatik (bağlantı bazında açık /
+  kapalı da seçilebilir). Pod TCP bağlantısından sonra TLS el sıkışması yapar; protokolü, sertifika sahibini, vereni,
+  **bitiş tarihini** ve sertifika hatalarını (güvenilmeyen, ad uyuşmazlığı, süresi dolmuş) bildirir. Geçersiz sertifika
+  başarısız test sayılır.
+
+**Uyarılar** (eşikler `Monitor:Alerts` altında):
+
+| Uyarı | Varsayılan | Etkisi |
+|---|---|---|
+| Bellek ≥ container limitinin %'si | 90 | sorunlu |
+| Son N dakikada yeniden başlama veya OOM kill | 60 | sorunlu |
+| TCP soketleri ≥ yerel port aralığının %'si | 70 | sorunlu |
+| Sertifikanın bitişine N gün | 14 | sorunlu |
+| CPU throttling ≥ % | 25 | not |
+| Yavaş bağlantı, değişen IP | – | not |
 
 ---
 
@@ -299,7 +349,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 
 - Kütüphane **hiç port ve uç açmaz**. Yalnızca `MonitorUrl`'e dışarı doğru HTTP(S) isteği yapar.
 - Gönderdikleri: pod adı, makine adı, süreç kimliği, IP adresleri, işletim sistemi / .NET sürümü, uygulama adı / sürümü /
-  build'i, cluster parmak izi, namespace ve yalnızca şu ortam değişkenleri: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
+  build'i, cluster parmak izi, namespace, kaynak ölçümleri (CPU, bellek, thread'ler, TCP soket sayıları, ağ byte sayaçları),
+  test sonuçları (TLS bağlantılarında sunucu sertifikasının sahibi, vereni ve tarihleri) ve yalnızca şu ortam değişkenleri: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. Başka hiçbir değişken okunmaz.
 - Pod yalnızca Monitor'de kendi uygulamasına bağlanmış bağlantıları test eder.
 - Monitor iç ağlar için tasarlanmıştır: kayıt açıktır ve uygulama anahtarı uygulamayı tanımlar ama şifre değildir. Monitor
@@ -314,19 +365,24 @@ dotnet run --project src/ConnectivityProbe.Monitor
 ```
 
 Varsayılan adres: http://localhost:5087/ . Monitor bağımsız bir uygulamadır, NuGet paketi değildir. Her ortam (test, prod)
-için ayrı bir Monitor çalıştırın.
+için ayrı bir Monitor çalıştırın. Arayüz **Türkçe ve İngilizce** kullanılabilir (üst menüde TR / EN).
 
 **Ekranlar**
 
 - **Monitör:** en kritik uygulama üstte büyük bir afişte; ardından "Dikkat gerektirenler" satırı ve her ekip için yatay
   kayan bir satır. Her kart durumunu, pod sayısını, bağlantı özetini ve sürümünü gösterir. Uygulama, anahtar, ekip, sürüm,
-  cluster veya pod adıyla arayın.
-- **Detay penceresi:** cluster'a göre gruplanmış pod'lar (ad, IP'ler, sürüm, build, namespace, son bildirim), bağlantı ×
-  pod matrisi (hangi pod hangi hedefe ne zamandır erişemiyor), geçmiş ve *Pod listesini sıfırla*.
-- **Sürümler:** cluster'lar (yeniden adlandırılabilir) ve her cluster'da çalışan sürümleri gösteren uygulamalar ×
-  cluster'lar tablosu.
-- **Tanımlar:** Birimler → Ekipler → Uygulamalar. Her ekibin kendi bağlantı havuzu vardır; ortak havuz herkese açıktır.
-  Bağlantıyı uygulamanın üzerine sürükleyerek bağlayın. Bir bağlantı kayıtlı başka bir uygulamayı gösterebilir
+  ağ veya pod adıyla arayın.
+- **Detay sayfası** (yeni tarayıcı sekmesinde açılır, `/?app=<kimlik>`):
+  - **Sürümler:** her ağda hangi sürümün / build'in kaç pod'da çalıştığı.
+  - **Bağlantılar:** pod'ların ağlarına göre gruplandığı bağlantı × pod matrisi; bir hedefe yalnızca bir cluster'ın
+    erişemediği hemen görülür (hangi pod, ne zamandır). Hücrelerde DNS süresi, TLS sonucu / sertifikanın bitişine kalan
+    gün ve "yavaş" işareti de bulunur.
+  - **Kaynaklar:** her pod'un CPU, bellek (limitle), throttling, thread, TCP soket, ağ hızı ve yeniden başlama bilgisi;
+    ~10 dakikalık grafiklerle.
+  - **Pod'lar** ağa göre gruplanmış (ad, IP, sürüm, build, namespace, son bildirim), geçmiş ve *Pod listesini sıfırla*.
+- **Tanımlar:** birim ve ekiplerden bağımsız tek bir bağlantı havuzu; alaka sıralı arama (yazım hataları ve Türkçe karakter
+  eksikleri tolere edilir). Sağda Birimler → Ekipler → Uygulamalar; bağlantıyı uygulamanın üzerine sürükleyerek bağlayın,
+  uygulamayı bir ekibin üzerine sürükleyerek taşıyın. Bir bağlantı kayıtlı başka bir uygulamayı gösterebilir
   ("hedef uygulama"); bu, matriste görünür.
 
 **Pod durumları**
@@ -346,6 +402,7 @@ için ayrı bir Monitor çalıştırın.
 | `IntervalSeconds` | 30 | Pod'lara gönderilen test aralığı. |
 | `ProbeTimeoutMs` | 5000 | Pod'lara gönderilen bağlantı zaman aşımı. |
 | `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
+| `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Uyarı eşikleri (bkz. [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)). |
 | `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
 
 Aynı makinede bir reverse proxy çalışıyorsa her istek localhost'tan geliyor görünür; bu durumda mutlaka `AdminPassword`
@@ -380,7 +437,8 @@ Adımlar:
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **2.0.0** | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |
+| **2.1.0** | Pod kaynakları (CPU, bellek ve limitler, throttling, OOM, thread'ler, TCP soketleri), TLS / sertifika kontrolü, DNS süresi, yavaşlama ve yeniden başlama tespiti. Pod'lar kendi IP adresini bildirir (`POD_IP` veya Monitor'e giden yol); Monitor cluster'ları pod ağıyla adlandırır (ör. `10.42.0.0/16`). Monitor: sürümler ve ağ gruplaması detay penceresinde, Türkçe / İngilizce arayüz. |
+| 2.0.0 | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |
 | 1.1.0 | Strict mod: pod'lar uygulama anahtarıyla tanımlarını çeker, içeriden test eder ve sonucu gönderir. |
 | 1.0.0 | İlk sürüm: `discover` ve `identity` uçları. |
 

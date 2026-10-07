@@ -26,7 +26,10 @@ That's all. Every pod then:
 - reports to the Monitor every 10 s (registering the application automatically on first contact),
 - pulls the connections attached to its application in the Monitor and tests them over TCP from inside the pod,
 - reports your application's **version and build** (from its assembly) and its **cluster** (Kubernetes service-account
-  CA fingerprint, or network address outside Kubernetes),
+  CA fingerprint and pod network, e.g. `10.42.0.0/16`),
+- reports its **resource usage**: CPU, memory, threads; in a container also CPU / memory **limits, throttling, OOM kills**
+  and TCP sockets (2.1+),
+- checks **TLS certificates** (expiry, name, trust) of `https://` / TLS targets and measures DNS time (2.1+),
 - says goodbye on shutdown, so deploys and scale-downs raise no alarm.
 
 If the Monitor cannot be reached, your application is not affected: the library writes a short English line to the
