@@ -20,7 +20,8 @@ one screen.
 | [`src/ConnectivityProbe`](src/ConnectivityProbe) | The library, published on NuGet as [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe). Targets `netstandard2.0` and `net462`, **no dependencies**. |
 | [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Central monitor (ASP.NET Core web app). Shows pods, versions, clusters and results; holds the connection definitions. **Not** a NuGet package. |
 | [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Sample ASP.NET Core app. |
-| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Unit and end-to-end tests: `dotnet test tests/ConnectivityProbe.Tests` |
+| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Library unit and end-to-end tests: `dotnet test tests/ConnectivityProbe.Tests` |
+| [`tests/ConnectivityProbe.Monitor.Tests`](tests/ConnectivityProbe.Monitor.Tests) | Monitor tests (pod states, alerts, TLS, slowness, networks, pool rules): `dotnet test tests/ConnectivityProbe.Monitor.Tests` |
 
 ---
 

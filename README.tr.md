@@ -19,7 +19,8 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 | [`src/ConnectivityProbe`](src/ConnectivityProbe) | Kütüphane; NuGet'te [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe) olarak yayınlanır. Hedefler: `netstandard2.0` ve `net462`, **bağımlılığı yoktur**. |
 | [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Merkezi izleme uygulaması (ASP.NET Core web uygulaması). Pod'ları, sürümleri, cluster'ları ve sonuçları gösterir; bağlantı tanımlarını tutar. NuGet paketi **değildir**. |
 | [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Örnek ASP.NET Core uygulaması. |
-| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Birim ve uçtan uca testler: `dotnet test tests/ConnectivityProbe.Tests` |
+| [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Kütüphanenin birim ve uçtan uca testleri: `dotnet test tests/ConnectivityProbe.Tests` |
+| [`tests/ConnectivityProbe.Monitor.Tests`](tests/ConnectivityProbe.Monitor.Tests) | Monitor testleri (pod durumları, uyarılar, TLS, yavaşlık, ağlar, havuz kuralları): `dotnet test tests/ConnectivityProbe.Monitor.Tests` |
 
 ---
 

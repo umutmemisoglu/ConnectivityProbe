@@ -25,12 +25,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Kütüphane testleri .NET 8, Monitor testleri .NET 10 ile çalışır.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
-      - name: Test
+      - name: Test (library)
         run: dotnet test tests/ConnectivityProbe.Tests -c Release
+
+      - name: Test (Monitor)
+        run: dotnet test tests/ConnectivityProbe.Monitor.Tests -c Release
+
+      - name: Test (Monitor UI search)
+        run: node --test tests/monitor-ui
 
       - name: Pack
         shell: bash
