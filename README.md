@@ -390,6 +390,31 @@ environment (test, prod). The UI is available in **Turkish and English** (TR / E
   application to attach it, drag an application onto a team to move it. A connection can point to another registered
   application ("target application"), which is shown in the matrix.
 
+**Teams notifications**
+
+Each application decides, independently of people, **which situations send a notification** (Definitions → application
+card → 🔔 Notifications). The rules are grouped and described in the UI:
+
+| Category | Rules (✔ = selected when the application first registers) |
+|---|---|
+| Application and pods | ✔ Application unreachable · ✔ Pod missing · ✔ Crash loop · Pod restarted |
+| Connections | ✔ Connection down · ✔ Connection partly down · Connection slow · Target IP changed |
+| Certificate | ✔ Certificate expiring (14 / 7 / 3 / 1 days) · ✔ Certificate invalid / expired |
+| Resources | ✔ Memory close to the limit · CPU throttled · Running out of ports |
+| Version / deploy | New version deployed · Deploy stuck |
+| Options | ✔ Also notify when resolved |
+
+Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page). The first
+time, they enter their name and the address of a Teams **Workflows** flow ("Send webhook alerts to a chat", chat with Flow
+bot); the steps are shown on screen, a test message is sent, and the browser remembers them. After that, "Notify me" is a
+single click on any application. No Azure / Entra registration or admin consent is needed. The address is kept secret.
+
+Notifications are designed not to be noisy: a situation is reported **only after it is confirmed** (e.g. 3 failed tests
+in a row, memory high for 5 minutes), **once** per incident, with all changes of an application in **one message**; a
+situation that keeps opening and closing sends a single "unstable" message; restarts caused by a deploy are not reported;
+open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor needs outbound HTTPS to Teams
+(the system proxy / `HTTPS_PROXY` is used).
+
 **Pod states**
 
 | State | Meaning |

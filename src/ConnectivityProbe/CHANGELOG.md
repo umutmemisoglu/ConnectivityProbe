@@ -31,6 +31,10 @@
 - Monitor definitions: one connection pool, independent of units and teams (team pools are merged into it; every
   connection can be attached to every application), ranked search in the pool, usage count and status per connection,
   applications moved between teams by drag and drop.
+- Monitor: **Teams notifications**. Each application selects which situations notify (15 rules in 5 categories, sensible
+  defaults on registration); people subscribe with one click ("Notify me") after a one-time Teams Workflows setup.
+  Notifications are confirmed, sent once per incident, grouped per application, protected against flapping and quiet
+  during deploys.
 - No breaking API change; 2.0 pods keep working (without resource and TLS data).
 
 ### Türkçe
@@ -62,6 +66,10 @@
 - Monitor tanımları: birim ve ekiplerden bağımsız tek bağlantı havuzu (ekip havuzları buna katılır; her bağlantı her
   uygulamaya atanabilir), havuzda alaka sıralı arama, bağlantı başına kullanım sayısı ve durum, uygulamaların ekipler arasında
   sürükle-bırak ile taşınması.
+- Monitor: **Teams bildirimleri**. Her uygulama hangi durumlarda bildirim gönderileceğini seçer (5 kategoride 15 kural,
+  kayıtta makul varsayılanlar); kişiler bir kerelik Teams Workflows kurulumundan sonra tek tıkla abone olur ("Bana haber
+  ver"). Bildirimler doğrulandıktan sonra, olay başına bir kez, uygulama başına tek mesajda gönderilir; gidip gelmeye karşı
+  korumalıdır ve deploy sırasında susar.
 - Kıran API değişikliği yok; 2.0 pod'ları çalışmaya devam eder (kaynak ve TLS bilgisi olmadan).
 
 ## 2.0.0

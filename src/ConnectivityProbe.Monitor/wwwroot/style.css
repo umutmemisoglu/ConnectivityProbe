@@ -531,3 +531,20 @@ a.logo { text-decoration: none; }
 .res-legend dt { font-weight: 700; }
 .res-legend dd { margin: 0; color: var(--text-2); }
 @media (max-width: 640px) { .res-legend dl { grid-template-columns: 1fr; } .res-legend dd { margin-bottom: 6px; } }
+
+/* Teams bildirimleri: uygulama kartındaki bölüm, kurallar, kayıt formu açıklaması */
+.notify { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.notify > summary { cursor: pointer; font-size: 13px; font-weight: 700; }
+.notify-who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; font-size: 13px; }
+.person { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); font-size: 12.5px; }
+.person.me { background: var(--accent); color: #fff; }
+.notify-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.notify-cat { margin: 0; padding: 6px 10px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.notify-cat legend { font-size: 12px; font-weight: 700; color: var(--text-2); padding: 0 4px; }
+.notify-rule { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; font-size: 13px; }
+.notify-rule input { margin-top: 3px; }
+.notify-rule .desc { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.notify-saved { color: var(--ok); font-size: 12px; }
+.dlg-intro { font-size: 13px; line-height: 1.5; color: var(--text-2); margin-bottom: 10px; }
+.dlg-intro ol { margin: 6px 0; padding-left: 20px; }
+.dlg-intro li { margin: 3px 0; }

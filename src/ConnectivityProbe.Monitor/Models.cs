@@ -69,6 +69,10 @@ public sealed class AppDefinition
     public DateTime RegisteredAtUtc { get; set; }
     /// <summary>Bu uygulamaya atanmış bağlantıların kimlikleri.</summary>
     public List<string> ConnectionIds { get; set; } = new();
+    /// <summary>Bildirim üreten kurallar (bkz. NotifyRules). Kişiden bağımsızdır; null = varsayılanlar (eski kayıtlar).</summary>
+    public List<string>? NotifyRules { get; set; }
+    /// <summary>Bu uygulamanın bildirimlerini alan kişiler.</summary>
+    public List<string> SubscriberIds { get; set; } = new();
 }
 
 /// <summary>
@@ -90,16 +94,36 @@ public sealed class DefinitionData
     public List<AppDefinition> Apps { get; set; } = new();
     public List<ConnectionDefinition> Connections { get; set; } = new();
     public List<ClusterDefinition> Clusters { get; set; } = new();
+    public List<PersonDefinition> People { get; set; } = new();
 }
 
 // ---------------------------------------------------------------------------------------------
 // API çıktıları ve girdileri
 // ---------------------------------------------------------------------------------------------
 
-public sealed record AppView(string Id, string? TeamId, string Name, string AppKey, DateTime RegisteredAtUtc, List<string> ConnectionIds)
+public sealed record AppView(string Id, string? TeamId, string Name, string AppKey, DateTime RegisteredAtUtc, List<string> ConnectionIds,
+    List<string> NotifyRules, List<string> SubscriberIds)
 {
-    public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.AppKey, a.RegisteredAtUtc, a.ConnectionIds.ToList());
+    public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.AppKey, a.RegisteredAtUtc, a.ConnectionIds.ToList(),
+        a.NotifyRules ?? Monitor.NotifyRules.Defaults(), a.SubscriberIds.ToList());
 }
+
+/// <summary>Kişinin arayüze giden hali (Teams adresi hiçbir zaman gönderilmez).</summary>
+public sealed record PersonView(string Id, string Name)
+{
+    public static PersonView From(PersonDefinition p) => new(p.Id, p.Name);
+}
+
+/// <summary>Bildirim kuralının arayüze giden hali.</summary>
+public sealed record RuleView(string Code, string Category, string Kind, string Severity, bool Default)
+{
+    public static RuleView From(NotifyRule r) => new(r.Code, r.Category, r.Kind.ToString(), r.Severity.ToString(), r.Default);
+}
+
+public sealed record NotifyInput(List<string>? Rules);
+
+/// <param name="WebhookUrl">Teams Workflows iş akışının adresi (yalnızca kayıt ve güncellemede gönderilir).</param>
+public sealed record PersonInput(string? Name, string? WebhookUrl, string? Lang);
 
 /// <summary>Bağlantı tanımının arayüze giden hali.</summary>
 public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls)
@@ -109,7 +133,8 @@ public sealed record ConnectionView(string Id, string Name, string Host, int? Po
 }
 
 public sealed record DefinitionsView(
-    List<UnitDefinition> Units, List<TeamDefinition> Teams, List<AppView> Apps, List<ConnectionView> Connections, List<ClusterDefinition> Clusters);
+    List<UnitDefinition> Units, List<TeamDefinition> Teams, List<AppView> Apps, List<ConnectionView> Connections, List<ClusterDefinition> Clusters,
+    List<PersonView> People, List<RuleView> Rules);
 
 public sealed record UnitInput(string? Name);
 

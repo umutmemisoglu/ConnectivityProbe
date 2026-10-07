@@ -133,6 +133,7 @@ function setTab(name) {
 // Dil değişince sabit metinler ve tüm ekranlar yeniden çizilir.
 function changeLang(lang) {
   setLang(lang);
+  renderMe();
   lastSnapJson = '';
   renderDefs();
   if (snap) { if (detailAppId) renderDetail(); else renderMonitor(); }
@@ -152,8 +153,10 @@ function renderMeta() {
 // Form penceresi (ekle/düzenle için ortak)
 // ---------------------------------------------------------------------------------------------
 // fields: [{ name, label, placeholder, type (text|number|checkbox|select), options [{value,label}], hint }]
-function openForm(title, fields, values, onSubmit) {
+function openForm(title, fields, values, onSubmit, intro) {
   $('#dlgTitle').textContent = title;
+  $('#dlgIntro').innerHTML = intro || '';
+  $('#dlgIntro').hidden = !intro;
   $('#dlgError').textContent = '';
   $('#dlgWarn').hidden = true;
   $('#dlgFields').innerHTML = fields.map((f) => {
@@ -178,11 +181,17 @@ function openForm(title, fields, values, onSubmit) {
       const el = form.elements[f.name];
       result[f.name] = f.type === 'checkbox' ? el.checked : el.value;
     });
+    // Sunucu yanıtlayana kadar (ör. Teams'e deneme mesajı birkaç saniye sürebilir) eski hata silinir, düğme kilitlenir.
+    const submit = form.querySelector('button[type=submit]');
+    $('#dlgError').textContent = '';
+    submit.disabled = true;
     try {
       await onSubmit(result);
       $('#dlg').close();
     } catch (err) {
       $('#dlgError').textContent = err.message;
+    } finally {
+      submit.disabled = false;
     }
   };
   $('#dlg').showModal();
@@ -386,9 +395,120 @@ function renderApps() {
             ${free.length ? `<select class="add-select" data-add-select="${a.id}"><option value="">${esc(t('apps.pickConn'))}</option>
               ${free.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>` : ''}
           </div>
+          ${notifySection(a)}
         </div>`;
     }).join('') : `<div class="empty">${esc(team ? t('apps.emptyTeam') : t('apps.selectTeam'))}</div>`}</div>`;
   $('#appsPanel').scrollTop = keep;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Teams bildirimleri
+//   - Uygulamanın bildirim kuralları kişiden bağımsızdır (Tanımlar'daki checkbox'lar); bildirim alan herkes için geçerlidir.
+//   - "Bana haber ver": kişi ilk seferde adını ve Teams Workflows adresini bir kez kaydeder (deneme mesajı gider); tarayıcı
+//     kişiyi hatırlar, sonraki uygulamalarda tek tık.
+// ---------------------------------------------------------------------------------------------
+let me = load('person', null);                 // bu tarayıcıdaki kişi: { id, name }
+const notifyOpen = new Set();                  // açık bildirim bölümleri (ekran her güncellendiğinde açık kalsın)
+
+const subscribersOf = (appId) => {
+  const a = defs.apps.find((x) => x.id === appId);
+  return (a?.subscriberIds || []).map((id) => (defs.people || []).find((p) => p.id === id)).filter(Boolean);
+};
+const isSubscribed = (appId) => !!me && subscribersOf(appId).some((p) => p.id === me.id);
+
+function subscriberNames(appId) {
+  const people = subscribersOf(appId);
+  return people.length
+    ? people.map((p) => `<span class="person ${me && p.id === me.id ? 'me' : ''}">${esc(p.name)}</span>`).join(' ')
+    : `<span class="muted">${esc(t('nt.nobody'))}</span>`;
+}
+
+function subscribeButton(appId) {
+  return isSubscribed(appId)
+    ? `<button class="nf-btn gray" data-unsubscribe="${esc(appId)}">${esc(t('nt.unsubscribe'))}</button>`
+    : `<button class="nf-btn gray" data-subscribe="${esc(appId)}" title="${esc(t('nt.subscribeTitle'))}">${esc(t('nt.subscribe'))}</button>`;
+}
+
+// Uygulama kartındaki bildirim bölümü: bildirim alanlar + düğme + kategorilere ayrılmış kurallar (açıklamalarıyla).
+function notifySection(a) {
+  const rules = defs.rules || [];
+  const selected = new Set(a.notifyRules || []);
+  const categories = [...new Set(rules.map((r) => r.category))];
+  const count = rules.filter((r) => r.category !== 'options' && selected.has(r.code)).length;
+  return `
+    <details class="notify" data-notify-app="${a.id}" ${notifyOpen.has(a.id) ? 'open' : ''}>
+      <summary>${esc(t('nt.title'))} <span class="muted">· ${subscribersOf(a.id).length} · ${count}/${rules.filter((r) => r.category !== 'options').length}</span></summary>
+      <div class="notify-who"><span class="muted">${esc(t('nt.subscribers'))}:</span> ${subscriberNames(a.id)} ${subscribeButton(a.id).replace('nf-btn gray', 'btn small')}</div>
+      <p class="hint">${esc(t('nt.rulesHelp'))}</p>
+      <div class="notify-cats">${categories.map((cat) => `
+        <fieldset class="notify-cat"><legend>${esc(t('nt.cat.' + cat))}</legend>
+          ${rules.filter((r) => r.category === cat).map((r) => `
+            <label class="notify-rule"><input type="checkbox" data-notify-rule="${r.code}" ${selected.has(r.code) ? 'checked' : ''}>
+              <span><b>${esc(t('rule.' + r.code))}</b><span class="desc">${esc(t('rule.' + r.code + '.d'))}</span></span></label>`).join('')}
+        </fieldset>`).join('')}</div>
+      <span class="notify-saved" hidden>${esc(t('nt.saved'))}</span>
+    </details>`;
+}
+
+// Kuralları kaydeder (checkbox değişince hemen).
+async function saveNotifyRules(details) {
+  const appId = details.dataset.notifyApp;
+  const rules = [...details.querySelectorAll('[data-notify-rule]:checked')].map((c) => c.dataset.notifyRule);
+  try {
+    const view = await api('PUT', `/api/apps/${appId}/notify`, { rules });
+    const a = defs.apps.find((x) => x.id === appId);
+    if (a) a.notifyRules = view.notifyRules;
+    const ok = details.querySelector('.notify-saved');
+    ok.hidden = false;
+    setTimeout(() => { ok.hidden = true; }, 1200);
+  } catch (err) { alert(err.message); await loadDefs(); }
+}
+
+// Kişi formu: ilk kayıt (ad + adres zorunlu) ya da profil düzenleme (adres boşsa değişmez).
+function personForm(existing, onDone) {
+  const fields = [
+    { name: 'name', label: t('nt.name'), placeholder: t('nt.namePh') },
+    { name: 'webhookUrl', label: t('nt.url'), placeholder: t('nt.urlPh'), hint: t('nt.urlHint') + (existing ? ' ' + t('nt.urlKeep') : '') },
+  ];
+  openForm(existing ? t('nt.profileTitle') : t('nt.regTitle'), fields, { name: existing?.name ?? '' }, async (v) => {
+    const body = { name: v.name, webhookUrl: v.webhookUrl, lang: LANG };
+    const person = existing ? await api('PUT', '/api/people/' + existing.id, body) : await api('POST', '/api/people', body);
+    me = { id: person.id, name: person.name };
+    save('person', me);
+    renderMe();
+    if (onDone) await onDone();
+    else await loadDefs();
+  }, existing ? '' : t('nt.regIntro'));
+}
+
+// "Bana haber ver": tanınan kişi tek tıkla eklenir; tanınmıyorsa önce bir kez kayıt.
+async function subscribe(appId) {
+  const add = async () => {
+    await api('PUT', `/api/apps/${appId}/subscribers/${me.id}`);
+    await loadDefs();
+    if (detailAppId) renderDetail();
+  };
+  if (!me) { personForm(null, add); return; }
+  try { await add(); }
+  catch (err) {
+    // Kişi Monitor'den silinmiş: yeniden kayıt.
+    me = null; save('person', null); renderMe();
+    personForm(null, add);
+  }
+}
+
+async function unsubscribe(appId) {
+  if (!me) return;
+  try { await api('DELETE', `/api/apps/${appId}/subscribers/${me.id}`); } catch { /* zaten çıkarılmış */ }
+  await loadDefs();
+  if (detailAppId) renderDetail();
+}
+
+// Üst menüde kişinin adı (profil); tıklayınca ad / Teams adresi değiştirilebilir.
+function renderMe() {
+  const b = $('#meBtn');
+  b.hidden = !me;
+  if (me) { b.textContent = t('nt.me', { name: me.name }); b.title = t('nt.meTitle'); }
 }
 
 // Bir bağlantıyı bir uygulamayla ilişkilendirir ve tanımları yeniler.
@@ -954,6 +1074,7 @@ function renderDetail() {
         <div class="m-actions">
           <button class="nf-btn gray" data-run title="${esc(t('runNow.title'))}">${ICON_PLAY}${esc(t('runNow'))}</button>
           ${resetButton(s)}
+          ${subscribeButton(s.appId)}
         </div>
       </div>
     </div>
@@ -979,6 +1100,7 @@ function renderDetail() {
           <div><span>${esc(t('m.networks'))}: </span>${esc(networks.join(', ') || '–')}</div>
           <div><span>${esc(t('m.conns'))}: </span>${total}${bad ? ` <span class="warn-t">${esc(t('m.connsBad', { n: bad }))}</span>` : ''}</div>
           <div><span>${esc(t('m.interval'))}: </span>${esc(t('m.intervalVal', { n: snap.intervalSeconds }))}</div>
+          <div><span>${esc(t('nt.subscribers'))}: </span>${subscriberNames(s.appId)}</div>
         </div>
       </div>
       ${versionsHtml(s)}
@@ -1329,10 +1451,12 @@ async function runNow() {
 
 // Monitör ekranı ve detay sayfasındaki tüm tıklamalar.
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-open-app], [data-run], [data-reset-app], [data-close-detail], [data-scroll], [data-goto-defs], [data-rename-cluster]');
+  const el = e.target.closest('[data-open-app], [data-run], [data-reset-app], [data-close-detail], [data-scroll], [data-goto-defs], [data-rename-cluster], [data-subscribe], [data-unsubscribe]');
   if (!el) return;
   const d = el.dataset;
 
+  if (d.subscribe) { e.stopPropagation(); subscribe(d.subscribe); return; }
+  if (d.unsubscribe) { e.stopPropagation(); unsubscribe(d.unsubscribe); return; }
   if (d.openApp) openDetail(d.openApp);
   else if (d.run !== undefined) runNow();
   else if (d.closeDetail !== undefined) {
@@ -1373,8 +1497,21 @@ $('#logout').addEventListener('click', async () => {
   try { await api('POST', '/api/auth/logout'); } finally { location.href = '/login.html'; }
 });
 
+// Bildirim bölümünün açık/kapalı durumu ve kural değişiklikleri.
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d.classList?.contains('notify')) { if (d.open) notifyOpen.add(d.dataset.notifyApp); else notifyOpen.delete(d.dataset.notifyApp); }
+}, true);
+$('#tab-defs').addEventListener('change', (e) => {
+  if (e.target.matches('[data-notify-rule]')) saveNotifyRules(e.target.closest('.notify'));
+});
+$('#meBtn').addEventListener('click', () => { if (me) personForm(me); });
+
 (async function init() {
   applyI18n();
+  renderMe();
+  // Tarayıcının hatırladığı kişi Monitor'den silindiyse unutulur.
+  if (me) { try { me = await api('GET', '/api/people/' + me.id); save('person', me); renderMe(); } catch { me = null; save('person', null); renderMe(); } }
   // Giriş zorunluysa (Monitor:AdminPassword tanımlı) çıkış düğmesini gösteriyoruz.
   try { const me = await api('GET', '/api/auth/me'); $('#logout').hidden = !me.loginRequired; } catch { /* yönlendirildi */ }
   if (detailAppId) {

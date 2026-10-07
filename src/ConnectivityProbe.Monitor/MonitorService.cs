@@ -38,6 +38,8 @@ public sealed class MonitorService : BackgroundService
 
     /// <summary>Saat (testlerde elle ilerletilir).</summary>
     private readonly TimeProvider _time;
+    /// <summary>Teams bildirimleri (her turda durumlar verilir).</summary>
+    private readonly NotificationService? _notifications;
     /// <summary>Monitor'ün başladığı an: yeniden başladıktan hemen sonra pod'lar bildirim gönderene kadar "eksik" sayılmasın diye.</summary>
     private readonly DateTime _startedUtc;
     /// <summary>"Şimdi test et"e her basıldığında artar; pod'lar değiştiğini görünce beklemeden test eder.</summary>
@@ -46,9 +48,10 @@ public sealed class MonitorService : BackgroundService
     private DateTime _lastSaveUtc;
 
     public MonitorService(DefinitionStore store, PodStateStore podState, IOptions<MonitorOptions> options, ILogger<MonitorService> log,
-        TimeProvider? time = null)
+        TimeProvider? time = null, NotificationService? notifications = null)
     {
         _time = time ?? TimeProvider.System;
+        _notifications = notifications;
         _startedUtc = Now;
         _runRequestId = _startedUtc.Ticks;
         _store = store;
@@ -97,6 +100,7 @@ public sealed class MonitorService : BackgroundService
     {
         _runtime.TryRemove(appId, out _);
         _latest.TryRemove(appId, out _);
+        _notifications?.Forget(appId);
         SavePodState();
         Trigger();
     }
@@ -303,6 +307,9 @@ public sealed class MonitorService : BackgroundService
         var clusterNames = BuildClusters(defs).ToDictionary(kv => kv.Key, kv => kv.Value.Name);
         foreach (var app in defs.Apps) _latest[app.Id] = Compute(app, clusterNames, defs, now);
         _lastRunUtc = now;
+
+        // Bildirimler: durumlar değerlendirilir, doğrulanan gelişmeler abonelere gönderilir.
+        _notifications?.Process(defs, _latest, now);
 
         // Pod listesini test aralığında bir diske yazıyoruz (yeni pod / kapanış / sıfırlama anında ayrıca yazılır).
         if (now - _lastSaveUtc >= TestInterval) SavePodState();

@@ -29,6 +29,7 @@
     <div class="lang-switch" role="group" data-i18n-title="lang.title">
       <button type="button" data-lang="tr">TR</button><button type="button" data-lang="en">EN</button>
     </div>
+    <button id="meBtn" class="btn" hidden></button>
     <button id="logout" class="btn" hidden data-i18n="logout" data-i18n-title="logout.title">Çıkış</button>
   </header>
 
@@ -65,6 +66,7 @@
   <dialog id="dlg">
     <form id="dlgForm">
       <h3 id="dlgTitle"></h3>
+      <div id="dlgIntro" class="dlg-intro" hidden></div>
       <div id="dlgFields"></div>
       <p id="dlgWarn" class="dlg-warn" hidden></p>
       <p id="dlgError" class="error"></p>

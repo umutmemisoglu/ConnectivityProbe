@@ -16,6 +16,9 @@ builder.Services.Configure<MonitorOptions>(builder.Configuration.GetSection("Mon
 builder.Services.AddSingleton<DefinitionStore>();
 builder.Services.AddSingleton<PodStateStore>();   // görülen / eksik pod'lar diske yazılır (data/pod-state.json)
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<INotificationSender, TeamsWebhookSender>();
+builder.Services.AddSingleton<NotificationService>();                  // Teams bildirimleri
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NotificationService>());
 builder.Services.AddSingleton<MonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MonitorService>());
 
@@ -150,7 +153,11 @@ api.MapPost("/agent/v2/report", (HttpContext ctx, AgentReport report, Definition
         {
             var existing = FindApp(d, key);
             if (existing != null) return existing;
-            var created = new AppDefinition { Id = NewId(), Name = name.Length > 100 ? name[..100] : name, AppKey = key, RegisteredAtUtc = DateTime.UtcNow };
+            var created = new AppDefinition
+            {
+                Id = NewId(), Name = name.Length > 100 ? name[..100] : name, AppKey = key, RegisteredAtUtc = DateTime.UtcNow,
+                NotifyRules = NotifyRules.Defaults() // ilk kayıtta varsayılan bildirim kuralları işaretli gelir
+            };
             d.Apps.Add(created);
             return created;
         });
@@ -173,7 +180,8 @@ api.MapGet("/definitions", (DefinitionStore store) =>
 {
     var d = store.Snapshot();
     return new DefinitionsView(d.Units, d.Teams,
-        d.Apps.Select(AppView.From).ToList(), d.Connections.Select(ConnectionView.From).ToList(), d.Clusters);
+        d.Apps.Select(AppView.From).ToList(), d.Connections.Select(ConnectionView.From).ToList(), d.Clusters,
+        d.People.Select(PersonView.From).ToList(), NotifyRules.All.Select(RuleView.From).ToList());
 });
 
 // Cluster'a elle ad verir (ör. "Prod İstanbul"). Boş ad otomatik ada (pod ağı, ör. 10.42.0.0/16) döndürür.
@@ -405,6 +413,99 @@ api.MapDelete("/apps/{appId}/connections/{connId}", (string appId, string connId
         ? Results.NoContent() : Results.NotFound());
 
 // ---------------------------------------------------------------------------------------------
+// Bildirimler: uygulama hangi durumlarda bildirim üretir (kişiden bağımsız) ve kimler alır.
+// ---------------------------------------------------------------------------------------------
+
+// Uygulamanın bildirim kurallarını kaydeder (Tanımlar'daki checkbox'lar).
+api.MapPut("/apps/{id}/notify", (string id, NotifyInput input, DefinitionStore store) =>
+{
+    var rules = NotifyRules.Normalize(input.Rules);
+    var app = store.Mutate(d =>
+    {
+        var a = d.Apps.FirstOrDefault(x => x.Id == id);
+        if (a != null) a.NotifyRules = rules;
+        return a;
+    });
+    return app == null ? Results.NotFound() : Results.Ok(AppView.From(app));
+});
+
+// "Bana haber ver" ilk kez: kişi adını ve Teams Workflows adresini bir kez kaydeder. Adres çalışıyor mu diye bir deneme
+// mesajı gönderilir; gelmezse kayıt yapılmaz. Adres hiçbir zaman arayüze geri gönderilmez.
+api.MapPost("/people", async (PersonInput input, HttpContext ctx, DefinitionStore store, NotificationService notifications) =>
+{
+    if (ValidateName(input.Name) is { } nameError) return Results.BadRequest(new { error = nameError });
+    if (ValidateWebhook(input.WebhookUrl) is { } urlError) return Results.BadRequest(new { error = urlError });
+
+    var person = new PersonDefinition
+    {
+        Id = NewId(), Name = input.Name!.Trim(), WebhookUrl = input.WebhookUrl!.Trim(), Lang = input.Lang == "en" ? "en" : "tr",
+        MonitorUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}", CreatedAtUtc = DateTime.UtcNow
+    };
+    if (await notifications.SendWelcomeAsync(person, ctx.RequestAborted) is { } sendError)
+        return Results.BadRequest(new { error = Lang.T(
+            $"Teams adresine deneme mesajı gönderilemedi ({sendError}). Adresi ve iş akışının açık olduğunu kontrol edin.",
+            $"The test message could not be sent to the Teams address ({sendError}). Check the address and that the workflow is on.") });
+
+    store.Mutate(d => { d.People.Add(person); return 0; });
+    return Results.Ok(PersonView.From(person));
+});
+
+// Tarayıcının hatırladığı kişi hâlâ kayıtlı mı.
+api.MapGet("/people/{id}", (string id, DefinitionStore store) =>
+    store.Snapshot().People.FirstOrDefault(p => p.Id == id) is { } p ? Results.Ok(PersonView.From(p)) : Results.NotFound());
+
+// Kişinin adını, dilini veya Teams adresini günceller (adres boşsa değişmez; değişirse deneme mesajı gönderilir).
+api.MapPut("/people/{id}", async (string id, PersonInput input, HttpContext ctx, DefinitionStore store, NotificationService notifications) =>
+{
+    if (ValidateName(input.Name) is { } nameError) return Results.BadRequest(new { error = nameError });
+    var current = store.Snapshot().People.FirstOrDefault(p => p.Id == id);
+    if (current == null) return Results.NotFound();
+    var newUrl = string.IsNullOrWhiteSpace(input.WebhookUrl) ? null : input.WebhookUrl.Trim();
+    if (newUrl != null)
+    {
+        if (ValidateWebhook(newUrl) is { } urlError) return Results.BadRequest(new { error = urlError });
+        current.WebhookUrl = newUrl;
+        current.Name = input.Name!.Trim();
+        current.Lang = input.Lang == "en" ? "en" : "tr";
+        if (await notifications.SendWelcomeAsync(current, ctx.RequestAborted) is { } sendError)
+            return Results.BadRequest(new { error = Lang.T($"Teams adresine deneme mesajı gönderilemedi ({sendError}).", $"The test message could not be sent ({sendError}).") });
+    }
+    var updated = store.Mutate(d =>
+    {
+        var p = d.People.FirstOrDefault(x => x.Id == id);
+        if (p == null) return null;
+        p.Name = input.Name!.Trim();
+        p.Lang = input.Lang == "en" ? "en" : "tr";
+        p.MonitorUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+        if (newUrl != null) p.WebhookUrl = newUrl;
+        return p;
+    });
+    return updated == null ? Results.NotFound() : Results.Ok(PersonView.From(updated));
+});
+
+// Kişiyi siler ve tüm uygulamaların bildirim listesinden çıkarır.
+api.MapDelete("/people/{id}", (string id, DefinitionStore store) =>
+    store.Mutate(d =>
+    {
+        foreach (var a in d.Apps) a.SubscriberIds.Remove(id);
+        return d.People.RemoveAll(p => p.Id == id) > 0;
+    }) ? Results.NoContent() : Results.NotFound());
+
+// "Bana haber ver" / "Bildirimi kapat": kişiyi uygulamanın bildirim listesine ekler veya çıkarır.
+api.MapPut("/apps/{appId}/subscribers/{personId}", (string appId, string personId, DefinitionStore store) =>
+    store.Mutate(d =>
+    {
+        var a = d.Apps.FirstOrDefault(x => x.Id == appId);
+        if (a == null || d.People.All(p => p.Id != personId)) return false;
+        if (!a.SubscriberIds.Contains(personId)) a.SubscriberIds.Add(personId);
+        return true;
+    }) ? Results.NoContent() : Results.NotFound());
+
+api.MapDelete("/apps/{appId}/subscribers/{personId}", (string appId, string personId, DefinitionStore store) =>
+    store.Mutate(d => d.Apps.FirstOrDefault(a => a.Id == appId)?.SubscriberIds.Remove(personId) ?? false)
+        ? Results.NoContent() : Results.NotFound());
+
+// ---------------------------------------------------------------------------------------------
 // Monitör
 // ---------------------------------------------------------------------------------------------
 
@@ -457,6 +558,12 @@ static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s
 static string DuplicateError(ConnectionDefinition existing) => Lang.T(
     $"Bu adres havuzda zaten var: \"{existing.Name}\" ({ConnectionRules.EndpointKey(existing.Host, existing.Port)}). Aynı adres ikinci kez eklenemez; mevcut bağlantıyı kullanın.",
     $"This address is already in the pool: \"{existing.Name}\" ({ConnectionRules.EndpointKey(existing.Host, existing.Port)}). The same address cannot be added twice; use the existing connection.");
+
+// Teams Workflows adresi: https ile başlayan tam bir adres olmalı.
+static string? ValidateWebhook(string? url) =>
+    Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps && url!.Length <= 2000
+        ? null
+        : Lang.T("Teams iş akışı adresi https:// ile başlayan tam bir adres olmalı.", "The Teams workflow address must be a full address starting with https://.");
 
 // TLS kontrolü modu: "on" / "off"; diğer her değer otomatik (null).
 static string? TlsMode(string? mode) => mode?.Trim().ToLowerInvariant() is "on" or "off" ? mode.Trim().ToLowerInvariant() : null;
