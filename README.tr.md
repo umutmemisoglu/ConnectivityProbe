@@ -400,10 +400,9 @@ uygulama kartı → 🔔 Bildirimler). Kurallar arayüzde kategorili ve açıkla
 | Sürüm / deploy | Yeni sürüm yayına alındı · Deploy takıldı |
 | Seçenekler | ✔ Düzelince de haber ver |
 
-Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası). Merkezi Teams iş akışı ve
-Microsoft girişi ayarlıysa kişi Microsoft hesabıyla girer ve otomatik abone olur; giriş ayarlı değilse bir kez şirket
-e-postasını yazar; merkezi iş akışı yoksa bir kez kendi Teams iş akışının adresini yapıştırır. Sonrasında "Bana haber ver"
-tek tıktır. Kurulum: [docs/teams-kurulum.md](docs/teams-kurulum.md).
+Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası), Microsoft (Teams)
+hesabıyla giriş yapar ve otomatik abone olur; sonrasında tek tıktır. Tek seferlik kurulum (Entra ID uygulama kaydı + merkezi
+Teams iş akışı) **Ayarlar → Teams bildirimleri** ekranından yapılır: [docs/teams-kurulum.md](docs/teams-kurulum.md).
 
 Bildirimler rahatsız etmeyecek şekilde tasarlandı: bir durum **ancak doğrulandıktan sonra** bildirilir (ör. üst üste 3
 başarısız test, bellek 5 dakika boyunca yüksek); olay başına **bir kez**; bir uygulamanın aynı turdaki tüm gelişmeleri
