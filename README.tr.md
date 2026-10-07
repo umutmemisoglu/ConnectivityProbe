@@ -400,10 +400,10 @@ uygulama kartı → 🔔 Bildirimler). Kurallar arayüzde kategorili ve açıkla
 | Sürüm / deploy | Yeni sürüm yayına alındı · Deploy takıldı |
 | Seçenekler | ✔ Düzelince de haber ver |
 
-Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası). İlk seferde adını ve
-Teams'teki **Workflows** iş akışının ("Send webhook alerts to a chat", Flow bot ile sohbet) adresini girer; adımlar ekranda
-anlatılır, bir deneme mesajı gönderilir ve tarayıcı kişiyi hatırlar. Sonrasında her uygulamada "Bana haber ver" tek tıktır.
-Azure / Entra kaydı veya yönetici onayı gerekmez. Adres gizli tutulur.
+Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası). Merkezi Teams iş akışı ve
+Microsoft girişi ayarlıysa kişi Microsoft hesabıyla girer ve otomatik abone olur; giriş ayarlı değilse bir kez şirket
+e-postasını yazar; merkezi iş akışı yoksa bir kez kendi Teams iş akışının adresini yapıştırır. Sonrasında "Bana haber ver"
+tek tıktır. Kurulum: [docs/teams-kurulum.md](docs/teams-kurulum.md).
 
 Bildirimler rahatsız etmeyecek şekilde tasarlandı: bir durum **ancak doğrulandıktan sonra** bildirilir (ör. üst üste 3
 başarısız test, bellek 5 dakika boyunca yüksek); olay başına **bir kez**; bir uygulamanın aynı turdaki tüm gelişmeleri

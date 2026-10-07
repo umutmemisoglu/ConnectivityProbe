@@ -68,8 +68,8 @@ public static class NotificationText
         return icon + " " + text;
     }
 
-    /// <summary>Teams Workflows iş akışına gönderilen mesaj (Adaptive Card).</summary>
-    public static object Card(NotifyBatch batch, PersonDefinition person, DateTime now)
+    /// <summary>Bildirim kartı (Adaptive Card içeriği; gönderim zarfı Delivery.For'da).</summary>
+    public static Dictionary<string, object?> Card(NotifyBatch batch, PersonDefinition person, DateTime now)
     {
         var en = person.Lang == "en";
         var worst = batch.Events.Where(e => e.Kind != NotifyEventKind.Resolved).Select(e => e.Severity).DefaultIfEmpty(Severity.Info).Max();
@@ -99,11 +99,11 @@ public static class NotificationText
             ["body"] = body,
             ["actions"] = url == null ? Array.Empty<object>() : new object[] { new { type = "Action.OpenUrl", title = en ? "Open details" : "Detayı aç", url } }
         };
-        return new { type = "message", attachments = new[] { new { contentType = "application/vnd.microsoft.card.adaptive", contentUrl = (string?)null, content = card } } };
+        return card;
     }
 
     /// <summary>Kayıt sırasında gönderilen deneme mesajı: bildirimlerin bu sohbete geleceğini gösterir.</summary>
-    public static object Welcome(PersonDefinition person)
+    public static Dictionary<string, object?> Welcome(PersonDefinition person)
     {
         var en = person.Lang == "en";
         var text = en
@@ -116,7 +116,7 @@ public static class NotificationText
             ["version"] = "1.4",
             ["body"] = new object[] { new { type = "TextBlock", text = "🔔 " + text, wrap = true } }
         };
-        return new { type = "message", attachments = new[] { new { contentType = "application/vnd.microsoft.card.adaptive", contentUrl = (string?)null, content = card } } };
+        return card;
     }
 
     private static string Duration(TimeSpan d, bool en)
@@ -132,4 +132,29 @@ public static class NotificationText
         DateTime.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var d)
             ? d.ToLocalTime().ToString(en ? "yyyy-MM-dd HH:mm" : "dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
             : iso;
+}
+
+/// <summary>
+/// Bir kişiye giden mesajın adresi ve zarfı:
+/// <list type="bullet">
+/// <item>Merkezi iş akışı (microsoft / email modu): <c>{ recipient, card }</c> merkezi adrese; iş akışı kartı alıcıya Flow bot ile
+/// özel mesaj olarak gönderir (Power Automate: "Post card in a chat or channel", Recipient = triggerBody()?['recipient'],
+/// Adaptive Card = string(triggerBody()?['card'])).</item>
+/// <item>Kişinin kendi iş akışı (webhook modu): Teams'in "Send webhook alerts to a chat" şablonunun beklediği mesaj zarfı.</item>
+/// </list>
+/// </summary>
+public static class Delivery
+{
+    public static (string Url, object Payload)? For(PersonDefinition person, NotificationOptions options, Dictionary<string, object?> card)
+    {
+        if (options.Central && !string.IsNullOrWhiteSpace(person.Email))
+            return (options.WorkflowUrl!.Trim(), new { recipient = person.Email, card });
+        if (!string.IsNullOrWhiteSpace(person.WebhookUrl))
+            return (person.WebhookUrl, new
+            {
+                type = "message",
+                attachments = new[] { new { contentType = "application/vnd.microsoft.card.adaptive", contentUrl = (string?)null, content = card } }
+            });
+        return null; // kişiye ulaşılacak bir yol yok (ör. mod değişti, e-posta yok)
+    }
 }

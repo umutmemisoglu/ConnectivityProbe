@@ -31,6 +31,46 @@ public sealed class MonitorOptions
 
     /// <summary>Uyarı eşikleri (bkz. <see cref="AlertOptions"/>).</summary>
     public AlertOptions Alerts { get; set; } = new();
+
+    /// <summary>Teams bildirimlerinin gönderim yolu (bkz. <see cref="NotificationOptions"/>).</summary>
+    public NotificationOptions Notifications { get; set; } = new();
+
+    /// <summary>Microsoft (Entra ID) ile giriş (bkz. <see cref="AuthOptions"/>).</summary>
+    public AuthOptions Auth { get; set; } = new();
+
+    /// <summary>
+    /// "Bana haber ver"in nasıl çalışacağı, ayarlardan otomatik seçilir:
+    /// <list type="bullet">
+    /// <item><b>microsoft</b>: merkezi iş akışı ve Microsoft girişi ayarlı. Kişi Microsoft hesabıyla girer, otomatik abone olur.</item>
+    /// <item><b>email</b>: yalnızca merkezi iş akışı ayarlı. Kişi bir kez adını ve e-postasını yazar.</item>
+    /// <item><b>webhook</b>: hiçbiri ayarlı değil. Kişi kendi Teams iş akışını kurup adresini yapıştırır.</item>
+    /// </list>
+    /// </summary>
+    public string NotifyMode =>
+        !Notifications.Central ? "webhook" : Auth.Enabled ? "microsoft" : "email";
+}
+
+/// <summary>"Monitor:Notifications" bölümü.</summary>
+public sealed class NotificationOptions
+{
+    /// <summary>
+    /// Merkezi Teams iş akışının (Workflows) adresi: gelen mesajı içindeki e-postaya Flow bot ile özel mesaj olarak gönderir.
+    /// Gizlidir; ortam değişkeniyle verin: Monitor__Notifications__WorkflowUrl. Boşsa her kişi kendi iş akışını kurar.
+    /// </summary>
+    public string? WorkflowUrl { get; set; }
+
+    public bool Central => !string.IsNullOrWhiteSpace(WorkflowUrl);
+}
+
+/// <summary>"Monitor:Auth" bölümü: Entra ID uygulama kaydının bilgileri (gizli değildir; client secret gerekmez).</summary>
+public sealed class AuthOptions
+{
+    /// <summary>Directory (tenant) ID.</summary>
+    public string? TenantId { get; set; }
+    /// <summary>Application (client) ID.</summary>
+    public string? ClientId { get; set; }
+
+    public bool Enabled => !string.IsNullOrWhiteSpace(TenantId) && !string.IsNullOrWhiteSpace(ClientId);
 }
 
 /// <summary>Kaynak, sertifika ve bağlantı uyarılarının eşikleri ("Monitor:Alerts" bölümü).</summary>

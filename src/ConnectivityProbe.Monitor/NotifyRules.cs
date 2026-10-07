@@ -58,15 +58,23 @@ public static class NotifyRules
 }
 
 /// <summary>
-/// Bildirim alan kişi. Kişi kendini "Bana haber ver" ile bir kez kaydeder: adı ve Teams'te oluşturduğu iş akışının (Workflows)
-/// adresi. Adres gizli tutulur; arayüze hiçbir zaman geri gönderilmez.
+/// Bildirim alan kişi. "Bana haber ver" ile kaydolur; bildirimin nereye gideceği Monitor'ün moduna göre değişir
+/// (bkz. MonitorOptions.NotifyMode):
+/// <list type="bullet">
+/// <item>microsoft / email: merkezi iş akışı, kişinin <see cref="Email"/> adresine özel mesaj gönderir.</item>
+/// <item>webhook: kişinin kendi iş akışının adresi (<see cref="WebhookUrl"/>). Gizli tutulur; arayüze geri gönderilmez.</item>
+/// </list>
 /// </summary>
 public sealed class PersonDefinition
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
-    /// <summary>Teams Workflows "webhook isteği alındığında sohbete gönder" iş akışının adresi.</summary>
+    /// <summary>Teams'teki e-posta / kullanıcı adı (merkezi iş akışı bu adrese gönderir).</summary>
+    public string Email { get; set; } = "";
+    /// <summary>Kişinin kendi Teams Workflows iş akışının adresi (yalnızca "webhook" modunda).</summary>
     public string WebhookUrl { get; set; } = "";
+    /// <summary>Kaydın kaynağı: microsoft (Entra ID girişi) | email | webhook.</summary>
+    public string Source { get; set; } = "webhook";
     /// <summary>Mesajların dili: tr | en (kayıt olurken arayüzde seçili olan).</summary>
     public string Lang { get; set; } = "tr";
     /// <summary>Mesajdaki "Detayı aç" bağlantısı için Monitor'ün adresi (kişinin kayıt olduğu adres).</summary>

@@ -407,7 +407,8 @@ function renderApps() {
 //   - "Bana haber ver": kişi ilk seferde adını ve Teams Workflows adresini bir kez kaydeder (deneme mesajı gider); tarayıcı
 //     kişiyi hatırlar, sonraki uygulamalarda tek tık.
 // ---------------------------------------------------------------------------------------------
-let me = load('person', null);                 // bu tarayıcıdaki kişi: { id, name }
+let me = load('person', null);                 // bu tarayıcıdaki kişi: { id, name } (Microsoft modunda sunucudaki oturumdan)
+let notifyMode = 'webhook';                    // microsoft | email | webhook (Monitor ayarlarından; bkz. /api/notify/me)
 const notifyOpen = new Set();                  // açık bildirim bölümleri (ekran her güncellendiğinde açık kalsın)
 
 const subscribersOf = (appId) => {
@@ -466,19 +467,22 @@ async function saveNotifyRules(details) {
 
 // Kişi formu: ilk kayıt (ad + adres zorunlu) ya da profil düzenleme (adres boşsa değişmez).
 function personForm(existing, onDone) {
+  const email = notifyMode === 'email';
   const fields = [
     { name: 'name', label: t('nt.name'), placeholder: t('nt.namePh') },
-    { name: 'webhookUrl', label: t('nt.url'), placeholder: t('nt.urlPh'), hint: t('nt.urlHint') + (existing ? ' ' + t('nt.urlKeep') : '') },
+    email
+      ? { name: 'email', label: t('nt.email'), placeholder: t('nt.emailPh'), hint: t('nt.emailHint') + (existing ? ' ' + t('nt.urlKeep') : '') }
+      : { name: 'webhookUrl', label: t('nt.url'), placeholder: t('nt.urlPh'), hint: t('nt.urlHint') + (existing ? ' ' + t('nt.urlKeep') : '') },
   ];
   openForm(existing ? t('nt.profileTitle') : t('nt.regTitle'), fields, { name: existing?.name ?? '' }, async (v) => {
-    const body = { name: v.name, webhookUrl: v.webhookUrl, lang: LANG };
+    const body = { name: v.name, webhookUrl: v.webhookUrl, email: v.email, lang: LANG };
     const person = existing ? await api('PUT', '/api/people/' + existing.id, body) : await api('POST', '/api/people', body);
     me = { id: person.id, name: person.name };
     save('person', me);
     renderMe();
     if (onDone) await onDone();
     else await loadDefs();
-  }, existing ? '' : t('nt.regIntro'));
+  }, existing ? '' : t(email ? 'nt.regIntroEmail' : 'nt.regIntro'));
 }
 
 // "Bana haber ver": tanınan kişi tek tıkla eklenir; tanınmıyorsa önce bir kez kayıt.
@@ -488,12 +492,17 @@ async function subscribe(appId) {
     await loadDefs();
     if (detailAppId) renderDetail();
   };
+  if (!me && notifyMode === 'microsoft') {
+    location.href = '/auth/microsoft?app=' + encodeURIComponent(appId) + '&returnUrl=' + encodeURIComponent(location.pathname + location.search);
+    return;
+  }
   if (!me) { personForm(null, add); return; }
   try { await add(); }
   catch (err) {
-    // Kişi Monitor'den silinmiş: yeniden kayıt.
+    // Kişi Monitor'den silinmiş: yeniden kayıt (Microsoft modunda yeniden giriş).
     me = null; save('person', null); renderMe();
-    personForm(null, add);
+    if (notifyMode === 'microsoft') location.href = '/auth/microsoft?app=' + encodeURIComponent(appId) + '&returnUrl=' + encodeURIComponent(location.pathname + location.search);
+    else personForm(null, add);
   }
 }
 
@@ -1505,13 +1514,22 @@ document.addEventListener('toggle', (e) => {
 $('#tab-defs').addEventListener('change', (e) => {
   if (e.target.matches('[data-notify-rule]')) saveNotifyRules(e.target.closest('.notify'));
 });
-$('#meBtn').addEventListener('click', () => { if (me) personForm(me); });
+$('#meBtn').addEventListener('click', () => {
+  if (!me) return;
+  if (notifyMode === 'microsoft') { if (confirm(t('nt.msSignedIn', { name: me.name }))) location.href = '/auth/microsoft/signout'; }
+  else personForm(me);
+});
 
 (async function init() {
   applyI18n();
   renderMe();
-  // Tarayıcının hatırladığı kişi Monitor'den silindiyse unutulur.
-  if (me) { try { me = await api('GET', '/api/people/' + me.id); save('person', me); renderMe(); } catch { me = null; save('person', null); renderMe(); } }
+  // Bildirim modu; Microsoft modunda kişi oturumdan, diğerlerinde tarayıcının hatırladığı kişi (Monitor'den silindiyse unutulur).
+  try {
+    const info = await api('GET', '/api/notify/me');
+    notifyMode = info.mode;
+    if (notifyMode === 'microsoft') { me = info.person; renderMe(); }
+  } catch { /* eski Monitor: webhook modu */ }
+  if (me && notifyMode !== 'microsoft') { try { me = await api('GET', '/api/people/' + me.id); save('person', me); renderMe(); } catch { me = null; save('person', null); renderMe(); } }
   // Giriş zorunluysa (Monitor:AdminPassword tanımlı) çıkış düğmesini gösteriyoruz.
   try { const me = await api('GET', '/api/auth/me'); $('#logout').hidden = !me.loginRequired; } catch { /* yönlendirildi */ }
   if (detailAppId) {

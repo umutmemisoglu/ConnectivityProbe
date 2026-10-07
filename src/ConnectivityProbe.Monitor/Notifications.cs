@@ -39,15 +39,16 @@ public sealed class TeamsWebhookSender : INotificationSender
 /// </summary>
 public sealed class NotificationService : BackgroundService
 {
-    private sealed record Delivery(PersonDefinition Person, NotifyBatch Batch, DateTime AtUtc);
+    private sealed record Outgoing(PersonDefinition Person, NotifyBatch Batch, DateTime AtUtc);
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30) };
 
     private readonly NotificationEngine _engine;
     private readonly INotificationSender _sender;
+    private readonly NotificationOptions _options;
     private readonly ILogger<NotificationService> _log;
-    private readonly Channel<Delivery> _queue = Channel.CreateUnbounded<Delivery>();
+    private readonly Channel<Outgoing> _queue = Channel.CreateUnbounded<Outgoing>();
     private readonly string _statePath;
     private readonly object _gate = new();
     private DateTime _lastSave;
@@ -56,6 +57,7 @@ public sealed class NotificationService : BackgroundService
         ILogger<NotificationService> log)
     {
         _engine = new NotificationEngine(TimeSpan.FromSeconds(Math.Max(5, options.Value.IntervalSeconds)));
+        _options = options.Value.Notifications;
         _sender = sender;
         _log = log;
         _statePath = Path.Combine(Path.GetDirectoryName(store.FilePath)!, "notify-state.json");
@@ -86,7 +88,7 @@ public sealed class NotificationService : BackgroundService
 
                 var batch = new NotifyBatch(app.Id, app.Name, events);
                 foreach (var person in defs.People.Where(p => app.SubscriberIds.Contains(p.Id)))
-                    _queue.Writer.TryWrite(new Delivery(person, batch, now));
+                    _queue.Writer.TryWrite(new Outgoing(person, batch, now));
                 _log.LogInformation("Notification for {App}: {Events} event(s) to {Count} subscriber(s)",
                     app.Name, events.Count, app.SubscriberIds.Count);
             }
@@ -101,9 +103,11 @@ public sealed class NotificationService : BackgroundService
         lock (_gate) _engine.Forget(appId);
     }
 
-    /// <summary>Kayıt sırasında deneme mesajı gönderir; adres çalışmıyorsa hata metnini döner.</summary>
-    public Task<string?> SendWelcomeAsync(PersonDefinition person, CancellationToken ct) =>
-        _sender.SendAsync(person.WebhookUrl, NotificationText.Welcome(person), ct);
+    /// <summary>Kayıt sırasında deneme mesajı gönderir; ulaşılamıyorsa hata metnini döner.</summary>
+    public async Task<string?> SendWelcomeAsync(PersonDefinition person, CancellationToken ct) =>
+        Delivery.For(person, _options, NotificationText.Welcome(person)) is { } d
+            ? await _sender.SendAsync(d.Url, d.Payload, ct)
+            : "no delivery address";
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -111,12 +115,17 @@ public sealed class NotificationService : BackgroundService
         {
             await foreach (var d in _queue.Reader.ReadAllAsync(ct))
             {
-                var payload = NotificationText.Card(d.Batch, d.Person, d.AtUtc);
+                // Mod değişmiş olabilir (ör. merkezi iş akışı sonradan ayarlandı): adres her gönderimde yeniden seçilir.
+                if (Delivery.For(d.Person, _options, NotificationText.Card(d.Batch, d.Person, d.AtUtc)) is not { } target)
+                {
+                    _log.LogWarning("Notification to {Person} skipped: no delivery address for the current mode", d.Person.Name);
+                    continue;
+                }
                 string? error = null;
                 for (var attempt = 0; attempt <= RetryDelays.Length; attempt++)
                 {
                     if (attempt > 0) await Task.Delay(RetryDelays[attempt - 1], ct);
-                    error = await _sender.SendAsync(d.Person.WebhookUrl, payload, ct);
+                    error = await _sender.SendAsync(target.Url, target.Payload, ct);
                     if (error == null) break;
                 }
                 if (error != null)

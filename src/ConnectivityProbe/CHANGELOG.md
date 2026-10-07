@@ -35,6 +35,9 @@
   defaults on registration); people subscribe with one click ("Notify me") after a one-time Teams Workflows setup.
   Notifications are confirmed, sent once per incident, grouped per application, protected against flapping and quiet
   during deploys.
+- Monitor: optional **Microsoft (Entra ID) sign-in** and a **central Teams workflow**: "Notify me" signs the person in and
+  subscribes them automatically (no client secret, only basic sign-in). Without sign-in, people type their e-mail once.
+  Setup: docs/teams-setup.md.
 - No breaking API change; 2.0 pods keep working (without resource and TLS data).
 
 ### Türkçe
@@ -70,6 +73,9 @@
   kayıtta makul varsayılanlar); kişiler bir kerelik Teams Workflows kurulumundan sonra tek tıkla abone olur ("Bana haber
   ver"). Bildirimler doğrulandıktan sonra, olay başına bir kez, uygulama başına tek mesajda gönderilir; gidip gelmeye karşı
   korumalıdır ve deploy sırasında susar.
+- Monitor: isteğe bağlı **Microsoft (Entra ID) ile giriş** ve **merkezi Teams iş akışı**: "Bana haber ver" kişiyi Microsoft
+  hesabıyla girdirip otomatik abone eder (client secret yok, yalnızca temel oturum açma). Giriş yoksa kişi bir kez
+  e-postasını yazar. Kurulum: docs/teams-kurulum.md.
 - Kıran API değişikliği yok; 2.0 pod'ları çalışmaya devam eder (kaynak ve TLS bilgisi olmadan).
 
 ## 2.0.0

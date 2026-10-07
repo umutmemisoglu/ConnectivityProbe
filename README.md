@@ -404,10 +404,10 @@ card → 🔔 Notifications). The rules are grouped and described in the UI:
 | Version / deploy | New version deployed · Deploy stuck |
 | Options | ✔ Also notify when resolved |
 
-Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page). The first
-time, they enter their name and the address of a Teams **Workflows** flow ("Send webhook alerts to a chat", chat with Flow
-bot); the steps are shown on screen, a test message is sent, and the browser remembers them. After that, "Notify me" is a
-single click on any application. No Azure / Entra registration or admin consent is needed. The address is kept secret.
+Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page). With a
+central Teams workflow and Microsoft sign-in configured, the person signs in with their Microsoft account and is subscribed
+automatically; without sign-in they type their company e-mail once; without a central workflow they paste the address of
+their own Teams workflow once. After that, "Notify me" is a single click. Setup: [docs/teams-setup.md](docs/teams-setup.md).
 
 Notifications are designed not to be noisy: a situation is reported **only after it is confirmed** (e.g. 3 failed tests
 in a row, memory high for 5 minutes), **once** per incident, with all changes of an application in **one message**; a

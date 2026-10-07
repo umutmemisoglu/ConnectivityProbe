@@ -122,8 +122,9 @@ public sealed record RuleView(string Code, string Category, string Kind, string 
 
 public sealed record NotifyInput(List<string>? Rules);
 
-/// <param name="WebhookUrl">Teams Workflows iş akışının adresi (yalnızca kayıt ve güncellemede gönderilir).</param>
-public sealed record PersonInput(string? Name, string? WebhookUrl, string? Lang);
+/// <param name="Email">Merkezi iş akışı modunda Teams e-postası.</param>
+/// <param name="WebhookUrl">Kişinin kendi Teams Workflows iş akışının adresi ("webhook" modunda; yalnızca kayıtta gönderilir).</param>
+public sealed record PersonInput(string? Name, string? WebhookUrl, string? Lang, string? Email = null);
 
 /// <summary>Bağlantı tanımının arayüze giden hali.</summary>
 public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls)
