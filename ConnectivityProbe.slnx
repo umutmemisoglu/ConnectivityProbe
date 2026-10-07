@@ -7,6 +7,7 @@
     <Project Path="src/ConnectivityProbe/ConnectivityProbe.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ConnectivityProbe.Monitor.Tests/ConnectivityProbe.Monitor.Tests.csproj" />
     <Project Path="tests/ConnectivityProbe.Tests/ConnectivityProbe.Tests.csproj" />
   </Folder>
 </Solution>

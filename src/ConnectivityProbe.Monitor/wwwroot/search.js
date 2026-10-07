@@ -90,6 +90,7 @@ const Search = (() => {
     const qWords = tokens(query);
     const qText = normalize(query).trim();
     if (!qWords.length) return entries.map((e) => ({ item: e.item, score: 0, matched: 0 }));
+    const numeric = qWords.every((w) => /^\d+$/.test(w));
 
     const results = [];
     for (const e of entries) {
@@ -110,8 +111,10 @@ const Search = (() => {
         if (qText.length >= 2 && f.text === qText) score += 15 * f.weight;
         else if (qText.length >= 2 && qWords.length > 1 && f.text.includes(qText)) score += 6 * f.weight;
       }
-      // Sorgu kelimelerinin en az yarısını karşılamayan sonuçlar gösterilmez.
-      if (matched > 0 && matched * 2 >= qWords.length) results.push({ item: e.item, score, matched });
+      // Sorgu kelimelerinin en az yarısını karşılamayan sonuçlar gösterilmez. Yalnızca sayılardan oluşan sorgularda (IP, port,
+      // "10.43") her parça eşleşmeli; yoksa "10.43" aranınca 10.80... adresli her şey de çıkardı.
+      const needed = numeric ? qWords.length : Math.ceil(qWords.length / 2);
+      if (matched > 0 && matched >= needed) results.push({ item: e.item, score, matched });
     }
     results.sort((a, b) => (b.matched - a.matched) || (b.score - a.score));
     // En iyi sonucun beşte birinden zayıf, tesadüfi eşleşmeleri (ör. harflerin dağınık geçmesi) gösterme.

@@ -671,12 +671,22 @@ function monogram(name) {
 }
 
 // Arama: uygulama adı, anahtar, ekip, birim, sürüm, ağ ve pod adı içinde (büyük/küçük harf duyarsız).
-function matches(s, q) {
-  if (!q) return true;
-  const team = teamOf(appTeamId(s.appId));
-  const unit = team ? unitOf(team.unitId) : null;
-  const extra = (s.pods || []).flatMap((p) => [p.appVersion, p.clusterName, p.network, p.primaryAddress, podName(p)]);
-  return [s.name, s.appKey, team?.name, unit?.name, ...extra].some((x) => lower(x).includes(q));
+// Arama motoru gibi alaka sıralı (bkz. search.js): yazım hatası ve eksik Türkçe karakter tolere edilir, en alakalı üstte.
+function searchApps(list, q) {
+  return Search.rank(q, list.map((s) => {
+    const team = teamOf(appTeamId(s.appId));
+    const unit = team ? unitOf(team.unitId) : null;
+    const pods = s.pods || [];
+    return { item: s, fields: [
+      { value: s.name, weight: 3 },
+      { value: s.appKey, weight: 2 },
+      { value: team?.name, weight: 1.5 },
+      { value: unit?.name, weight: 1 },
+      { value: [...new Set(pods.map((p) => p.appVersion))].join(' '), weight: 1 },
+      { value: [...new Set(pods.flatMap((p) => [p.clusterName, p.network, p.primaryAddress]))].join(' '), weight: 1 },
+      { value: pods.map(podName).join(' '), weight: 1 },
+    ] };
+  })).map((r) => r.item);
 }
 
 // Satır başlığındaki durum sayaçları: ● sağlıklı ● sorunlu ● erişilemiyor.
@@ -865,7 +875,9 @@ function renderMonitor() {
   if (q || onlyProblems) {
     $('#billboard').hidden = true;
     if (!wasSearching) window.scrollTo(0, 0); // sonuçlar sayfanın başından başlasın
-    const found = sortApps(all.filter((s) => (!onlyProblems || problemOf(s)) && matches(s, q)));
+    // Arama varsa alaka sırasıyla, yalnızca "sorunlular" seçiliyse önem sırasıyla.
+    const pool = all.filter((s) => !onlyProblems || problemOf(s));
+    const found = q ? searchApps(pool, q) : sortApps(pool);
     const what = [q ? `"<b>${esc($('#search').value.trim())}</b>"` : '', onlyProblems ? `<b>${esc(t('search.problems'))}</b>` : ''].filter(Boolean).join(' · ');
     list.innerHTML = `<p class="search-head">${t('search.head', { what, n: found.length })}</p>`
       + (found.length ? `<div class="nf-grid">${found.map(tile).join('')}</div>` : `<div class="empty">${esc(t('search.empty'))}</div>`);
@@ -1160,22 +1172,34 @@ function episodesHtml(s) {
 function cellExtras(cell) {
   const parts = [];
   if (cell.dnsMs != null) parts.push(`<span class="dns">${esc(t('mx.dns', { n: cell.dnsMs }))}</span>`);
+  // Sertifika durumu sade bir cümleyle: "Sertifika 66 gün geçerli", "Sertifika 9 gün sonra bitiyor", "Sertifika geçersiz"...
+  // TLS sürümü ipucunda gösterilir; yalnızca eski ve güvensiz sürümlerde (TLS 1.0 / 1.1) hücrede de uyarılır.
   const tls = cell.tls;
   if (tls) {
     const days = tls.notAfterUtc ? Math.floor((new Date(tls.notAfterUtc) - Date.now()) / 86400000) : null;
-    const cls = !tls.success ? 'bad' : days != null && days <= (snap?.certificateDays ?? 14) ? 'warn' : 'ok';
-    const label = days == null ? (tls.success ? 'ok' : t('mx.failed')) : days < 0 ? t('mx.tlsExpired') : t('mx.tlsDays', { n: days });
-    parts.push(`<span class="tls ${cls}">🔒 ${esc((tls.protocol || t('mx.tls')).replace(/^Tls(\d)(\d)?$/, (m, a, b) => 'TLS ' + a + (b ? '.' + b : '')))} · ${esc(label)}</span>`);
+    const expiring = days != null && days <= (snap?.certificateDays ?? 14);
+    const cls = !tls.success ? 'bad' : expiring ? 'warn' : 'ok';
+    const label = !tls.handshake ? t('mx.tlsFailed')
+      : days != null && days < 0 ? t('mx.certExpired')
+      : !tls.success ? t('mx.certInvalid')
+      : days == null ? t('mx.certOk')
+      : expiring ? t('mx.certExpiring', { n: days })
+      : t('mx.certValid', { n: days });
+    parts.push(`<span class="tls ${cls}">🔒 ${esc(label)}</span>`);
+    if (/^(Tls|Tls11|Ssl\d)$/.test(tls.protocol || '')) parts.push(`<span class="tls warn">${esc(t('mx.tlsOld', { p: tlsVersion(tls.protocol) }))}</span>`);
   }
   if (cell.slow) parts.push(`<span class="slow-tag">${esc(t('mx.slow'))}</span>`);
   return parts.join('');
 }
 
+// "Tls13" -> "TLS 1.3", "Tls" -> "TLS 1.0".
+const tlsVersion = (p) => (p === 'Tls' ? 'TLS 1.0' : String(p || '').replace(/^Tls(\d)(\d)?$/, (m, a, b) => 'TLS ' + a + '.' + (b || '0')));
+
 // Hücre ipucundaki sertifika ayrıntıları.
 function tlsTip(tls) {
   if (!tls) return [];
   return [
-    tls.protocol ? t('mx.tlsProto', { p: tls.protocol }) : '',
+    tls.protocol ? t('mx.tlsProto', { p: tlsVersion(tls.protocol) }) : '',
     tls.subject ? t('mx.cert', { subject: tls.subject }) : '',
     tls.issuer ? t('mx.certIssuer', { issuer: tls.issuer }) : '',
     tls.notAfterUtc ? t('mx.certEnd', { t: new Date(tls.notAfterUtc).toLocaleString(LOCALE()) }) : '',

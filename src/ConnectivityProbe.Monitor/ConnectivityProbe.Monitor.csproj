@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ConnectivityProbe.Monitor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ConnectivityProbe\ConnectivityProbe.csproj" />
   </ItemGroup>
 

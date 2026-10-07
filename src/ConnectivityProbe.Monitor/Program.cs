@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<MonitorOptions>(builder.Configuration.GetSection("Monitor"));
 builder.Services.AddSingleton<DefinitionStore>();
 builder.Services.AddSingleton<PodStateStore>();   // görülen / eksik pod'lar diske yazılır (data/pod-state.json)
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<MonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MonitorService>());
 
@@ -285,7 +286,7 @@ api.MapPost("/connections", (ConnectionInput input, DefinitionStore store) =>
     };
     var error2 = store.Mutate(d =>
     {
-        if (DuplicateOf(d, conn.Host, conn.Port, exceptId: null) is { } dup) return DuplicateError(dup);
+        if (ConnectionRules.DuplicateOf(d, conn.Host, conn.Port, exceptId: null) is { } dup) return DuplicateError(dup);
         if (conn.TargetAppId != null && d.Apps.All(a => a.Id != conn.TargetAppId)) return Lang.T("Hedef uygulama bulunamadı", "Target application not found");
         d.Connections.Add(conn);
         return null;
@@ -303,7 +304,8 @@ api.MapPut("/connections/{id}", (string id, ConnectionInput input, DefinitionSto
         var c = d.Connections.FirstOrDefault(x => x.Id == id);
         if (c == null) return (View: (ConnectionView?)null, Error: (string?)"notfound");
         // Adres değiştiyse başka bir bağlantıyla çakışmamalı (adresi değişmeyen eski çiftler yine düzenlenebilir).
-        if (EndpointKey(input.Host, input.Port) != EndpointKey(c.Host, c.Port) && DuplicateOf(d, input.Host, input.Port, exceptId: id) is { } dup)
+        if (ConnectionRules.EndpointKey(input.Host, input.Port) != ConnectionRules.EndpointKey(c.Host, c.Port)
+            && ConnectionRules.DuplicateOf(d, input.Host, input.Port, exceptId: id) is { } dup)
             return (null, DuplicateError(dup));
         var targetAppId = NullIfEmpty(input.TargetAppId);
         if (targetAppId != null && d.Apps.All(a => a.Id != targetAppId)) return (null, Lang.T("Hedef uygulama bulunamadı", "Target application not found"));
@@ -452,21 +454,9 @@ static bool FixedEquals(string? a, string? b) =>
 
 static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
-// Bağlantının test edilen adresi: "host:port" (küçük harf, sondaki nokta atılır). Testler host ve port üzerinden yapıldığı için
-// "sql01:1433" ile "SQL01" + 1433, "https://github.com/" ile "https://github.com/login" aynı adrestir.
-static string? EndpointKey(string? host, int? port) =>
-    ProbeTarget.TryParse(host, port?.ToString(), out var h, out var p, out _, out _) ? h.Trim().TrimEnd('.').ToLowerInvariant() + ":" + p : null;
-
-// Havuzda aynı adresi test eden başka bir bağlantı (yoksa null).
-static ConnectionDefinition? DuplicateOf(DefinitionData d, string? host, int? port, string? exceptId)
-{
-    var key = EndpointKey(host, port);
-    return key == null ? null : d.Connections.FirstOrDefault(c => c.Id != exceptId && EndpointKey(c.Host, c.Port) == key);
-}
-
 static string DuplicateError(ConnectionDefinition existing) => Lang.T(
-    $"Bu adres havuzda zaten var: \"{existing.Name}\" ({EndpointKey(existing.Host, existing.Port)}). Aynı adres ikinci kez eklenemez; mevcut bağlantıyı kullanın.",
-    $"This address is already in the pool: \"{existing.Name}\" ({EndpointKey(existing.Host, existing.Port)}). The same address cannot be added twice; use the existing connection.");
+    $"Bu adres havuzda zaten var: \"{existing.Name}\" ({ConnectionRules.EndpointKey(existing.Host, existing.Port)}). Aynı adres ikinci kez eklenemez; mevcut bağlantıyı kullanın.",
+    $"This address is already in the pool: \"{existing.Name}\" ({ConnectionRules.EndpointKey(existing.Host, existing.Port)}). The same address cannot be added twice; use the existing connection.");
 
 // TLS kontrolü modu: "on" / "off"; diğer her değer otomatik (null).
 static string? TlsMode(string? mode) => mode?.Trim().ToLowerInvariant() is "on" or "off" ? mode.Trim().ToLowerInvariant() : null;

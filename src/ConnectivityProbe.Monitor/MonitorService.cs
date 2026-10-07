@@ -36,15 +36,21 @@ public sealed class MonitorService : BackgroundService
     private readonly ConcurrentDictionary<string, AppStatus> _latest = new();
     private readonly SemaphoreSlim _trigger = new(0, 1);
 
+    /// <summary>Saat (testlerde elle ilerletilir).</summary>
+    private readonly TimeProvider _time;
     /// <summary>Monitor'ün başladığı an: yeniden başladıktan hemen sonra pod'lar bildirim gönderene kadar "eksik" sayılmasın diye.</summary>
-    private readonly DateTime _startedUtc = DateTime.UtcNow;
+    private readonly DateTime _startedUtc;
     /// <summary>"Şimdi test et"e her basıldığında artar; pod'lar değiştiğini görünce beklemeden test eder.</summary>
-    private long _runRequestId = DateTime.UtcNow.Ticks;
+    private long _runRequestId;
     private DateTime? _lastRunUtc;
     private DateTime _lastSaveUtc;
 
-    public MonitorService(DefinitionStore store, PodStateStore podState, IOptions<MonitorOptions> options, ILogger<MonitorService> log)
+    public MonitorService(DefinitionStore store, PodStateStore podState, IOptions<MonitorOptions> options, ILogger<MonitorService> log,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
+        _startedUtc = Now;
+        _runRequestId = _startedUtc.Ticks;
         _store = store;
         _podState = podState;
         _opt = options.Value;
@@ -60,6 +66,8 @@ public sealed class MonitorService : BackgroundService
             _runtime[appId] = rt;
         }
     }
+
+    private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     private TimeSpan TestInterval => TimeSpan.FromSeconds(Math.Max(5, _opt.IntervalSeconds));
     private int Threshold => Math.Max(1, _opt.MissingAfterCycles);
@@ -104,7 +112,7 @@ public sealed class MonitorService : BackgroundService
     /// <param name="sourceIp">Bildirimin geldiği adres; pod kendi adresini bildirmediyse yedek olarak kullanılır.</param>
     public AgentAssignment AcceptAgentReport(AppDefinition app, DefinitionData defs, AgentReport report, string sourceIp)
     {
-        var now = DateTime.UtcNow;
+        var now = Now;
         var pod = report.Pod;
 
         // Cluster: Kubernetes'te cluster sertifikasının parmak izi (aynı pod ağını kullanan iki cluster da ayrılır);
@@ -281,10 +289,11 @@ public sealed class MonitorService : BackgroundService
         }
     }
 
-    private void Refresh()
+    /// <summary>Durumları hemen yeniden hesaplar (arka plan döngüsü her RefreshInterval'da çağırır; testler doğrudan).</summary>
+    internal void Refresh()
     {
         var defs = _store.Snapshot();
-        var now = DateTime.UtcNow;
+        var now = Now;
 
         // Silinmiş uygulamaların durumunu temizliyoruz.
         var ids = defs.Apps.Select(a => a.Id).ToHashSet();
@@ -555,7 +564,7 @@ public sealed class MonitorService : BackgroundService
     // Her uygulamanın bilinen pod'larını diske yazar.
     private void SavePodState()
     {
-        _lastSaveUtc = DateTime.UtcNow;
+        _lastSaveUtc = Now;
         try
         {
             var state = new Dictionary<string, PersistedAppPods>();
