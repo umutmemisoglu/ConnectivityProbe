@@ -437,6 +437,24 @@ open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor
 
 If a reverse proxy runs on the same machine, every request looks like localhost, so always set `AdminPassword`.
 
+**Docker / Kubernetes**
+
+The Monitor uses the library from source, so build from the repository root:
+
+```bash
+docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
+docker run -d -p 8080:8080 -v cpmonitor-data:/app/data -e Monitor__AdminPassword=<password> connectivity-monitor
+```
+
+- Listens on **8080** (http). Publish it behind an ingress / proxy that terminates TLS; `X-Forwarded-Proto` and
+  `X-Forwarded-Host` are honored (needed for Microsoft sign-in).
+- **`/app/data` must be persistent** (a volume, in Kubernetes a PersistentVolumeClaim): definitions, pod state, settings and
+  login keys live there. Run a **single replica**: the data is a file, not a shared database.
+- **`Monitor__AdminPassword` is required** in a container: requests come from the container network, not localhost, so
+  without a password the UI refuses everyone. Give it as a secret.
+- `GET /healthz` returns `ok` without a login, for liveness / readiness probes.
+- The container runs as the non-root `app` user.
+
 ---
 
 ## Upgrading from 1.x
