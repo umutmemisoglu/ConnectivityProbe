@@ -102,6 +102,13 @@ app.Use(async (ctx, next) =>
 {
     Lang.Set(ctx); // hata mesajlarının dili (arayüzde seçilen)
     var path = ctx.Request.Path;
+    // Container / Kubernetes sağlık kontrolü (liveness / readiness): girişsiz, bilgi içermez.
+    if (path == "/healthz")
+    {
+        ctx.Response.ContentType = "text/plain";
+        await ctx.Response.WriteAsync("ok");
+        return;
+    }
     // Microsoft girişinin dönüşü site dışından gelir (admin çerezi gönderilmez); bu iki uç kendi doğrulamasını yapar.
     if (path.StartsWithSegments("/api/agent") || path.StartsWithSegments("/api/auth")
         || path == "/signin-oidc" || path.StartsWithSegments("/auth/microsoft")

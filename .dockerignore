@@ -1,0 +1,16 @@
+# Docker derleme bağlamına girmeyecekler (bkz. src/ConnectivityProbe.Monitor/Dockerfile)
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/*.user
+.git/
+.github/
+artifacts/
+TestResults/
+docs/
+samples/
+tests/
+
+# Monitor'ün yerel çalışma verisi (iç sunucu adları, oturum anahtarları): imaja asla girmemeli.
+src/ConnectivityProbe.Monitor/data/

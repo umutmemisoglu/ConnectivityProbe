@@ -433,6 +433,24 @@ doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır)
 Aynı makinede bir reverse proxy çalışıyorsa her istek localhost'tan geliyor görünür; bu durumda mutlaka `AdminPassword`
 verin.
 
+**Docker / Kubernetes**
+
+Monitor kütüphaneyi kaynak koddan kullandığı için imaj deponun kökünden derlenir:
+
+```bash
+docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
+docker run -d -p 8080:8080 -v cpmonitor-data:/app/data -e Monitor__AdminPassword=<şifre> connectivity-monitor
+```
+
+- **8080** portunu (http) dinler. TLS'i sonlandıran bir ingress / proxy arkasında yayınlayın; `X-Forwarded-Proto` ve
+  `X-Forwarded-Host` dikkate alınır (Microsoft girişi için gerekli).
+- **`/app/data` kalıcı olmalı** (volume; Kubernetes'te PersistentVolumeClaim): tanımlar, pod durumu, ayarlar ve oturum
+  anahtarları buradadır. **Tek replika** çalıştırın: veri ortak bir veritabanı değil, dosyadır.
+- Container'da **`Monitor__AdminPassword` zorunludur**: istekler localhost'tan değil container ağından gelir; şifre yoksa
+  arayüz herkesi reddeder. Secret olarak verin.
+- `GET /healthz` girişsiz `ok` döner (liveness / readiness kontrolleri için).
+- Container root olmayan `app` kullanıcısıyla çalışır.
+
 ---
 
 ## 1.x'ten geçiş
