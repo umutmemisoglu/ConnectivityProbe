@@ -355,7 +355,7 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. Başka hiçbir değişken okunmaz.
 - Pod yalnızca Monitor'de kendi uygulamasına bağlanmış bağlantıları test eder.
 - Monitor iç ağlar için tasarlanmıştır: kayıt açıktır ve uygulama anahtarı uygulamayı tanımlar ama şifre değildir. Monitor
-  arayüzünü `Monitor:AdminPassword` ile koruyun ve HTTPS arkasında yayınlayın.
+  arayüzü `Monitor:AdminPassword` verilmedikçe erişebilen herkese açıktır; yalnızca iç ağda, HTTPS arkasında yayınlayın.
 
 ---
 
@@ -423,15 +423,12 @@ doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır)
 
 | Ayar | Varsayılan | Anlamı |
 |---|---|---|
-| `AdminUser` / `AdminPassword` | `admin` / boş | Arayüz girişi. Şifre yoksa arayüze yalnızca Monitor'ün çalıştığı makineden (localhost) erişilir. Agent uçları (`/api/agent/*`) hiçbir zaman giriş istemez. |
+| `AdminUser` / `AdminPassword` | `admin` / boş | İsteğe bağlı arayüz girişi. Şifre yoksa arayüz Monitor'e erişebilen herkese açıktır; şifre verilirse giriş sayfası çıkar. Agent uçları (`/api/agent/*`) hiçbir zaman giriş istemez. |
 | `IntervalSeconds` | 30 | Pod'lara gönderilen test aralığı. |
 | `ProbeTimeoutMs` | 5000 | Pod'lara gönderilen bağlantı zaman aşımı. |
 | `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Uyarı eşikleri (bkz. [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)). |
 | `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
-
-Aynı makinede bir reverse proxy çalışıyorsa her istek localhost'tan geliyor görünür; bu durumda mutlaka `AdminPassword`
-verin.
 
 **Docker / Kubernetes**
 
@@ -439,15 +436,14 @@ Monitor kütüphaneyi kaynak koddan kullandığı için imaj deponun kökünden 
 
 ```bash
 docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
-docker run -d -p 8080:8080 -v cpmonitor-data:/app/data -e Monitor__AdminPassword=<şifre> connectivity-monitor
+docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
 ```
 
 - **8080** portunu (http) dinler. TLS'i sonlandıran bir ingress / proxy arkasında yayınlayın; `X-Forwarded-Proto` ve
   `X-Forwarded-Host` dikkate alınır (Microsoft girişi için gerekli).
 - **`/app/data` kalıcı olmalı** (volume; Kubernetes'te PersistentVolumeClaim): tanımlar, pod durumu, ayarlar ve oturum
   anahtarları buradadır. **Tek replika** çalıştırın: veri ortak bir veritabanı değil, dosyadır.
-- Container'da **`Monitor__AdminPassword` zorunludur**: istekler localhost'tan değil container ağından gelir; şifre yoksa
-  arayüz herkesi reddeder. Secret olarak verin.
+- Arayüz girişsiz açılır. Giriş istenirse `Monitor__AdminPassword` verin (secret olarak).
 - `GET /healthz` girişsiz `ok` döner (liveness / readiness kontrolleri için).
 - Container root olmayan `app` kullanıcısıyla çalışır.
 
