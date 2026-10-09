@@ -4,7 +4,8 @@
 #   docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
 #
 # Çalıştırma (ayrıntılar: README → Docker):
-#   docker run -d -p 8080:8080 -v cpmonitor-data:/app/data -e Monitor__AdminPassword=<şifre> connectivity-monitor
+#   docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
+#   (arayüze giriş şifresi isteğe bağlı: -e Monitor__AdminPassword=<şifre>)
 #
 # - Port 8080 (http). TLS'i önündeki ingress / proxy sonlandırır; X-Forwarded-Proto / X-Forwarded-Host dikkate alınır.
 # - Kalıcı veri /app/data altındadır (tanımlar, pod durumu, ayarlar, oturum anahtarları): mutlaka bir volume bağlayın.

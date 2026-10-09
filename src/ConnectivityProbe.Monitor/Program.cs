@@ -85,12 +85,13 @@ var app = builder.Build();
 var monitorOptions = app.Services.GetRequiredService<IOptions<MonitorOptions>>().Value;
 var loginRequired = !string.IsNullOrEmpty(monitorOptions.AdminPassword);
 if (!loginRequired)
-    app.Logger.LogWarning("Monitor:AdminPassword is not set: the UI is only reachable from this machine (localhost). Set it before exposing the Monitor.");
+    app.Logger.LogWarning("Monitor:AdminPassword is not set: the UI is open to everyone who can reach the Monitor.");
 
 // step 2: Erişim kapısı.
 //   - /api/agent/*: Strict pod'ların uçları; giriş değil uygulama anahtarı (X-ConnectivityProbe-AppKey) ister.
 //   - Giriş sayfası ve giriş uçları: herkese açık.
-//   - Geri kalan her şey (arayüz, tanımlar, monitör): şifre tanımlıysa giriş yapmış kullanıcı; tanımlı değilse yalnızca localhost.
+//   - Geri kalan her şey (arayüz, tanımlar, monitör): şifre tanımlıysa giriş yapmış kullanıcı; tanımlı değilse herkese açık
+//     (yetkilendirme sonra ele alınacak).
 // Ayarlar kaydedilince Microsoft girişi yeni bilgilerle yeniden yapılandırılır (Monitor'ü yeniden başlatmak gerekmez).
 var settingsStore = app.Services.GetRequiredService<SettingsStore>();
 var oidcCache = app.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConnectOptions>>();
@@ -118,23 +119,13 @@ app.Use(async (ctx, next) =>
         return;
     }
 
-    bool allowed = loginRequired
-        ? ctx.User.Identity?.IsAuthenticated == true
-        : ctx.Connection.RemoteIpAddress is { } ip && IPAddress.IsLoopback(ip);
-    if (allowed)
+    if (!loginRequired || ctx.User.Identity?.IsAuthenticated == true)
     {
         await next(ctx);
         return;
     }
 
-    if (!loginRequired)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsJsonAsync(new { error = Lang.T(
-            "Monitor:AdminPassword tanımlı değil; arayüze yalnızca Monitor'ün çalıştığı makineden erişilebilir.",
-            "Monitor:AdminPassword is not set; the UI is only reachable from the machine the Monitor runs on.") });
-    }
-    else if (path.StartsWithSegments("/api"))
+    if (path.StartsWithSegments("/api"))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsJsonAsync(new { error = Lang.T("Giriş gerekli", "Login required") });

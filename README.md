@@ -359,7 +359,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. No other variable is ever read.
 - The pod tests only the connections that are attached to its application in the Monitor.
 - The Monitor is meant for internal networks: registration is open, and the app key identifies the application but is
-  not a password. Protect the Monitor UI with `Monitor:AdminPassword` and publish it behind HTTPS.
+  not a password. The Monitor UI is open to everyone who can reach it unless `Monitor:AdminPassword` is set; publish it
+  only on the internal network, behind HTTPS.
 
 ---
 
@@ -428,14 +429,12 @@ open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `AdminUser` / `AdminPassword` | `admin` / empty | UI login. Without a password the UI is only reachable from the Monitor's own machine (localhost). The agent endpoints (`/api/agent/*`) never require a login. |
+| `AdminUser` / `AdminPassword` | `admin` / empty | Optional UI login. Without a password the UI is open to everyone who can reach the Monitor; with one, a login page is shown. The agent endpoints (`/api/agent/*`) never require a login. |
 | `IntervalSeconds` | 30 | Test interval sent to the pods. |
 | `ProbeTimeoutMs` | 5000 | Connection timeout sent to the pods. |
 | `MissingAfterCycles` | 3 | Test intervals without a report before a pod is "missing". |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Alert thresholds (see [Resources, TLS and latency](#resources-tls-and-latency-21)). |
 | `DataFile` | `data/definitions.json` | Definitions. Pod state (`pod-state.json`) and login keys (`keys/`) are kept next to it. |
-
-If a reverse proxy runs on the same machine, every request looks like localhost, so always set `AdminPassword`.
 
 **Docker / Kubernetes**
 
@@ -443,15 +442,14 @@ The Monitor uses the library from source, so build from the repository root:
 
 ```bash
 docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
-docker run -d -p 8080:8080 -v cpmonitor-data:/app/data -e Monitor__AdminPassword=<password> connectivity-monitor
+docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
 ```
 
 - Listens on **8080** (http). Publish it behind an ingress / proxy that terminates TLS; `X-Forwarded-Proto` and
   `X-Forwarded-Host` are honored (needed for Microsoft sign-in).
 - **`/app/data` must be persistent** (a volume, in Kubernetes a PersistentVolumeClaim): definitions, pod state, settings and
   login keys live there. Run a **single replica**: the data is a file, not a shared database.
-- **`Monitor__AdminPassword` is required** in a container: requests come from the container network, not localhost, so
-  without a password the UI refuses everyone. Give it as a secret.
+- The UI opens without a login. To require one, set `Monitor__AdminPassword` (as a secret).
 - `GET /healthz` returns `ok` without a login, for liveness / readiness probes.
 - The container runs as the non-root `app` user.
 

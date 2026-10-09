@@ -20,7 +20,7 @@ Object.assign(I18N.en, {
   applyI18n();
   document.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => { setLang(b.dataset.lang); error.textContent = ''; }));
 
-  // Giriş gerekmiyorsa (şifre tanımlı değil ve localhost'tayız) veya zaten giriş yapılmışsa doğrudan arayüze geçiyoruz.
+  // Giriş gerekmiyorsa (şifre tanımlı değil) veya zaten giriş yapılmışsa doğrudan arayüze geçiyoruz.
   try {
     const me = await (await fetch('/api/auth/me')).json();
     if (!me.loginRequired || me.authenticated) { location.replace('/'); return; }

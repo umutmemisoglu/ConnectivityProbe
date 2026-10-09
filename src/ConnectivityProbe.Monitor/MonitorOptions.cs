@@ -7,8 +7,8 @@ public sealed class MonitorOptions
     public string AdminUser { get; set; } = "admin";
 
     /// <summary>
-    /// Monitor arayüzüne giriş şifresi. Verilmezse arayüze yalnızca Monitor'ün çalıştığı makineden (localhost) erişilebilir;
-    /// başkalarının erişebildiği bir yerde çalışıyorsa mutlaka verin. Ortam değişkeniyle verin: Monitor__AdminPassword.
+    /// Monitor arayüzüne giriş şifresi (isteğe bağlı). Verilmezse arayüz Monitor'e erişebilen herkese açıktır; verilirse
+    /// giriş sayfası çıkar. Ortam değişkeniyle verin: Monitor__AdminPassword.
     /// Pod'ların kullandığı /api/agent uçları şifre değil, uygulama anahtarıyla çalışır.
     /// </summary>
     public string? AdminPassword { get; set; }
