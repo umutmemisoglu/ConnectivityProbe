@@ -59,7 +59,7 @@ public sealed class PodStateStore
                 Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
                 var tmp = _path + ".tmp";
                 File.WriteAllText(tmp, JsonSerializer.Serialize(state, Json));
-                File.Move(tmp, _path, overwrite: true);
+                AtomicFile.Replace(tmp, _path);
             }
             catch (Exception ex)
             {

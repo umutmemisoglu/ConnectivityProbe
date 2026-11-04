@@ -63,7 +63,7 @@ public sealed class DefinitionStore
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var tmp = _path + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(_data, Json));
-        File.Move(tmp, _path, overwrite: true);
+        AtomicFile.Replace(tmp, _path);
     }
 
     private static DefinitionData Clone(DefinitionData d) =>

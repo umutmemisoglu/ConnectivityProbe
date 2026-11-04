@@ -56,8 +56,10 @@ public sealed class SettingsStore
             lock (_gate)
                 return new NotifySettings
                 {
-                    TenantId = Pick(_saved.TenantId, _config.Auth.TenantId),
-                    ClientId = Pick(_saved.ClientId, _config.Auth.ClientId),
+                    // GUID'ler küçük harfe çevrilir: Entra ID belirteçteki "aud" değerini küçük harfle yazar ve doğrulama
+                    // büyük/küçük harfe duyarlıdır (büyük harfle girilen Client ID girişi bozardı).
+                    TenantId = Guid(Pick(_saved.TenantId, _config.Auth.TenantId)),
+                    ClientId = Guid(Pick(_saved.ClientId, _config.Auth.ClientId)),
                     WorkflowUrl = Pick(_saved.WorkflowUrl, _config.Notifications.WorkflowUrl),
                     PublicUrl = Pick(_saved.PublicUrl, _config.PublicUrl)?.TrimEnd('/')
                 };
@@ -79,10 +81,13 @@ public sealed class SettingsStore
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var tmp = _path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(_saved, Json));
-            File.Move(tmp, _path, overwrite: true);
+            AtomicFile.Replace(tmp, _path);
         }
         Changed?.Invoke();
     }
+
+    private static string? Guid(string? value) =>
+        value != null && System.Guid.TryParse(value, out var g) ? g.ToString("D") : value;
 
     private static string? Pick(string? saved, string? configured) =>
         !string.IsNullOrWhiteSpace(saved) ? saved.Trim() : string.IsNullOrWhiteSpace(configured) ? null : configured.Trim();

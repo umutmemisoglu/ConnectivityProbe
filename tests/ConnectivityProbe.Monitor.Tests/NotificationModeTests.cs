@@ -43,6 +43,17 @@ public class NotificationModeTests
     }
 
     [Fact]
+    public void Tenant_and_client_ids_are_normalized_to_lowercase()
+    {
+        // Entra ID belirteçteki "aud" değerini küçük harfle yazar; büyük harfle girilen Client ID girişi bozmamalı.
+        using var h = new Harness();
+        var store = new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options));
+        store.Save("4CBBF06E-35AF-4376-A318-F74D530C8183", " B425C86A-BB51-4FD3-82A4-DA274E3DCA57 ", null);
+        Assert.Equal("4cbbf06e-35af-4376-a318-f74d530c8183", store.Current.TenantId);
+        Assert.Equal("b425c86a-bb51-4fd3-82a4-da274e3dca57", store.Current.ClientId);
+    }
+
+    [Fact]
     public void Public_url_comes_from_the_ui_or_the_configuration()
     {
         using var h = new Harness(o => o.PublicUrl = "https://cfg.example/");

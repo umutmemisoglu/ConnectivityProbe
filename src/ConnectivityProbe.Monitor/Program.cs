@@ -69,6 +69,17 @@ authentication
         // Tarayıcılar http://localhost'u güvenli saydığı için yerel denemede de çalışır.
         o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
         o.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
+        // Microsoft'tan dönüşte giriş tamamlanamazsa (belirteç doğrulanamadı, çerez kayboldu...) 500 yerine nedenini
+        // gösteren bir sayfa; ayrıntı Monitor günlüğüne de yazılır.
+        o.Events.OnRemoteFailure = async ctx =>
+        {
+            var log = ctx.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("MicrosoftLogin");
+            log.LogWarning(ctx.Failure, "Microsoft sign-in failed on return");
+            ctx.HandleResponse();
+            await MicrosoftLogin.ErrorPage(Lang.T(
+                $"Microsoft girişi tamamlanamadı: {ctx.Failure?.Message}",
+                $"Microsoft sign-in could not be completed: {ctx.Failure?.Message}")).ExecuteAsync(ctx.HttpContext);
+        };
     });
 builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, MicrosoftLoginOptions>();
 

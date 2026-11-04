@@ -146,7 +146,7 @@ public sealed class NotificationService : BackgroundService
         {
             var tmp = _statePath + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(_engine.Export(), Json));
-            File.Move(tmp, _statePath, overwrite: true);
+            AtomicFile.Replace(tmp, _statePath);
         }
         catch (IOException ex)
         {
