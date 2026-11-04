@@ -12,6 +12,12 @@ public sealed class NotifySettings
     public string? ClientId { get; set; }
     /// <summary>Merkezi Teams iş akışının adresi (gizli; arayüze geri gönderilmez).</summary>
     public string? WorkflowUrl { get; set; }
+    /// <summary>
+    /// Monitor'ün kullanıcıların açtığı adresi (ör. https://monitor.sirket.com). Verilirse Microsoft girişinin dönüş adresi
+    /// ve Teams mesajlarındaki bağlantılar bununla kurulur; TLS'i önde sonlandıran bir yük dengeleyici "https" bilgisini
+    /// iletmese bile doğru adres kullanılır.
+    /// </summary>
+    public string? PublicUrl { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore] public bool SignInConfigured => !string.IsNullOrWhiteSpace(TenantId) && !string.IsNullOrWhiteSpace(ClientId);
     [System.Text.Json.Serialization.JsonIgnore] public bool WorkflowConfigured => !string.IsNullOrWhiteSpace(WorkflowUrl);
@@ -52,7 +58,8 @@ public sealed class SettingsStore
                 {
                     TenantId = Pick(_saved.TenantId, _config.Auth.TenantId),
                     ClientId = Pick(_saved.ClientId, _config.Auth.ClientId),
-                    WorkflowUrl = Pick(_saved.WorkflowUrl, _config.Notifications.WorkflowUrl)
+                    WorkflowUrl = Pick(_saved.WorkflowUrl, _config.Notifications.WorkflowUrl),
+                    PublicUrl = Pick(_saved.PublicUrl, _config.PublicUrl)?.TrimEnd('/')
                 };
         }
     }
@@ -61,13 +68,14 @@ public sealed class SettingsStore
     /// Ayarları kaydeder. null = değiştirme; boş metin = temizle (yapılandırmadaki değere dön). İş akışı adresi gizli olduğu için
     /// arayüz onu hiç görmez; yalnızca yeni değer gönderilirse değişir.
     /// </summary>
-    public void Save(string? tenantId, string? clientId, string? workflowUrl)
+    public void Save(string? tenantId, string? clientId, string? workflowUrl, string? publicUrl = null)
     {
         lock (_gate)
         {
             if (tenantId != null) _saved.TenantId = tenantId.Trim();
             if (clientId != null) _saved.ClientId = clientId.Trim();
             if (workflowUrl != null) _saved.WorkflowUrl = workflowUrl.Trim();
+            if (publicUrl != null) _saved.PublicUrl = publicUrl.Trim().TrimEnd('/');
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var tmp = _path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(_saved, Json));

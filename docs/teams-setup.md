@@ -49,6 +49,11 @@ Microsoft only accepts `https` redirect addresses (except localhost). Publish th
 address (in Kubernetes: Ingress + company certificate). It must be **exactly** the redirect URI of step 1. Behind an
 ingress / proxy, `X-Forwarded-Proto` and `X-Forwarded-Host` are honored (ingresses send them by default).
 
+If TLS is terminated at a load balancer in front and the Redirect URI on the Settings screen starts with `http://`, enter
+the https address (e.g. `https://monitor.company.com`) under **Settings → Teams notifications → Monitor address** and
+save; it can also be given as an environment variable: `Monitor__PublicUrl`. Microsoft sign-in, the Redirect URI and the
+links in Teams messages are then built from it.
+
 ## 3. Central Teams workflow
 
 The Monitor posts every notification to this workflow with the recipient's e-mail; the workflow delivers it as a personal

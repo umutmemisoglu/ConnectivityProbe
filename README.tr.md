@@ -429,6 +429,7 @@ doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır)
 | `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Uyarı eşikleri (bkz. [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)). |
 | `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
+| `PublicUrl` | boş | Kullanıcıların açtığı adres (ör. `https://monitor.sirket.com`). TLS önde sonlanıp `https` bilgisi iletilmiyorsa verin; Microsoft girişi ve Teams bağlantıları bunu kullanır. Ayarlar ekranından da girilebilir. |
 
 **Docker / Kubernetes**
 

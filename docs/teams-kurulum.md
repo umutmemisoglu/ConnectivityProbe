@@ -50,6 +50,11 @@ adreste yayınlayın (Kubernetes'te Ingress + şirket sertifikası). Adres, 1. a
 olmalıdır. Monitor bir ingress / proxy arkasındaysa `X-Forwarded-Proto` ve `X-Forwarded-Host` başlıkları dikkate alınır
 (ingress'ler bunu varsayılan olarak gönderir).
 
+TLS önde bir yük dengeleyicide sonlanıyor ve Ayarlar ekranındaki Redirect URI `http://` ile görünüyorsa, **Ayarlar →
+Teams bildirimleri → Monitor'ün adresi** alanına https adresini (ör. `https://monitor.sirket.com`) yazıp kaydedin; ortam
+değişkeniyle de verilebilir: `Monitor__PublicUrl`. Microsoft girişi, Redirect URI ve Teams mesajlarındaki bağlantılar bu
+adresle kurulur.
+
 ## 3. Merkezi Teams iş akışı
 
 Monitor her bildirimi bu iş akışına alıcının e-postasıyla gönderir; iş akışı mesajı kişiye Flow bot üzerinden özel sohbet

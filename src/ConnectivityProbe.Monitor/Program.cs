@@ -98,6 +98,18 @@ var oidcCache = app.Services.GetRequiredService<IOptionsMonitorCache<OpenIdConne
 settingsStore.Changed += () => oidcCache.TryRemove(MicrosoftLogin.MicrosoftScheme);
 
 app.UseForwardedHeaders();
+// Ayarlardaki "Monitor'ün adresi" verildiyse isteğin adresi ona çevrilir: TLS önde sonlanıp "https" bilgisi iletilmese de
+// Microsoft girişinin dönüş adresi ve bağlantılar doğru (https) kurulur. Algılanan adres Ayarlar ekranında gösterilir.
+app.Use(async (ctx, next) =>
+{
+    ctx.Items["detectedUrl"] = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+    if (settingsStore.Current.PublicUrl is { } publicUrl && Uri.TryCreate(publicUrl, UriKind.Absolute, out var u))
+    {
+        ctx.Request.Scheme = u.Scheme;
+        ctx.Request.Host = new HostString(u.Authority);
+    }
+    await next(ctx);
+});
 app.UseAuthentication();
 app.Use(async (ctx, next) =>
 {
@@ -555,6 +567,9 @@ api.MapGet("/settings/notifications", (HttpContext ctx, SettingsStore settings) 
     {
         tenantId = s.TenantId ?? "", clientId = s.ClientId ?? "",
         workflowConfigured = s.WorkflowConfigured, signInConfigured = s.SignInConfigured, ready = s.Ready,
+        // Monitor'ün adresi: ayarlanan (boş olabilir) ve isteğin geldiği adresten algılanan.
+        publicUrl = s.PublicUrl ?? "",
+        detectedUrl = ctx.Items["detectedUrl"] as string ?? "",
         // Entra ID kaydına girilecek dönüş adresi (bu Monitor'ün adresiyle).
         redirectUri = $"{ctx.Request.Scheme}://{ctx.Request.Host}/signin-oidc"
     });
@@ -569,7 +584,14 @@ api.MapPut("/settings/notifications", (NotifySettingsInput input, SettingsStore 
         return Results.BadRequest(new { error = Lang.T("Application (client) ID bir GUID olmalı.", "Application (client) ID must be a GUID.") });
     if (!string.IsNullOrWhiteSpace(input.WorkflowUrl) && ValidateWebhook(input.WorkflowUrl) is { } urlError)
         return Results.BadRequest(new { error = urlError });
-    settings.Save(input.TenantId, input.ClientId, string.IsNullOrWhiteSpace(input.WorkflowUrl) ? null : input.WorkflowUrl);
+    // Monitor'ün adresi: yalnızca şema ve ad (ör. https://monitor.sirket.com); yol, sorgu içermez.
+    if (!string.IsNullOrWhiteSpace(input.PublicUrl)
+        && (!Uri.TryCreate(input.PublicUrl.Trim(), UriKind.Absolute, out var pu) || pu.Scheme is not ("https" or "http")
+            || pu.AbsolutePath.Trim('/').Length > 0 || pu.Query.Length > 0))
+        return Results.BadRequest(new { error = Lang.T(
+            "Monitor'ün adresi yalnızca şema ve addan oluşmalı (ör. https://monitor.sirket.com).",
+            "The Monitor address must be only a scheme and host (e.g. https://monitor.company.com).") });
+    settings.Save(input.TenantId, input.ClientId, string.IsNullOrWhiteSpace(input.WorkflowUrl) ? null : input.WorkflowUrl, input.PublicUrl);
     return Results.NoContent();
 });
 

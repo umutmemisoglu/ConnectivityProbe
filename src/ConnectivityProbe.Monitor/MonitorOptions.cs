@@ -32,6 +32,12 @@ public sealed class MonitorOptions
     /// <summary>Uyarı eşikleri (bkz. <see cref="AlertOptions"/>).</summary>
     public AlertOptions Alerts { get; set; } = new();
 
+    /// <summary>
+    /// Monitor'ün kullanıcıların açtığı adresi (ör. https://monitor.sirket.com); arayüzdeki Ayarlar boşsa kullanılır.
+    /// TLS önde sonlanıp "https" bilgisi iletilmiyorsa verin: Monitor__PublicUrl.
+    /// </summary>
+    public string? PublicUrl { get; set; }
+
     /// <summary>Teams bildirimleri: arayüzdeki Ayarlar boşsa kullanılan varsayılan (bkz. SettingsStore).</summary>
     public NotificationOptions Notifications { get; set; } = new();
 

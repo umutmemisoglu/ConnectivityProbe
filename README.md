@@ -435,6 +435,7 @@ open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor
 | `MissingAfterCycles` | 3 | Test intervals without a report before a pod is "missing". |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Alert thresholds (see [Resources, TLS and latency](#resources-tls-and-latency-21)). |
 | `DataFile` | `data/definitions.json` | Definitions. Pod state (`pod-state.json`) and login keys (`keys/`) are kept next to it. |
+| `PublicUrl` | empty | The address people open (e.g. `https://monitor.company.com`). Set it when TLS is terminated in front and `https` is not passed on; Microsoft sign-in and Teams links use it. Also editable under Settings. |
 
 **Docker / Kubernetes**
 

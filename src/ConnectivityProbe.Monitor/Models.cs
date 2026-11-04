@@ -123,7 +123,7 @@ public sealed record RuleView(string Code, string Category, string Kind, string 
 public sealed record NotifyInput(List<string>? Rules);
 
 /// <summary>Ayarlar → Teams bildirimleri. null = değiştirme; iş akışı adresi yalnızca yeni değer yazılınca değişir.</summary>
-public sealed record NotifySettingsInput(string? TenantId, string? ClientId, string? WorkflowUrl);
+public sealed record NotifySettingsInput(string? TenantId, string? ClientId, string? WorkflowUrl, string? PublicUrl = null);
 
 public sealed record NotifyTestInput(string? Email);
 

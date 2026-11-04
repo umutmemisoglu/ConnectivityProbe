@@ -515,6 +515,9 @@ function renderMe() {
 // ---------------------------------------------------------------------------------------------
 // Ayarlar → Teams bildirimleri (tek seferlik kurulum)
 // ---------------------------------------------------------------------------------------------
+// Microsoft localhost dışında http dönüş adresini kabul etmez.
+const insecureRedirect = (uri) => /^http:\/\//i.test(uri || '') && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/)/i.test(uri);
+
 const statusChip = (ok, label) => `<span class="st-chip ${ok ? 'ok' : 'missing'}">${ok ? '✓' : '✗'} ${esc(label)}</span>`;
 
 async function renderSettings() {
@@ -532,6 +535,10 @@ async function renderSettings() {
       <section class="set-step">
         <h3>1. ${esc(t('set.signInTitle'))} ${statusChip(s.signInConfigured, s.signInConfigured ? t('set.configured') : t('set.missing'))}</h3>
         <details class="set-guide"><summary>${esc(t('set.howTo'))}</summary>${t('set.signInGuide')}</details>
+        <div class="field"><label for="s_public">${esc(t('set.publicUrl'))}</label>
+          <input id="s_public" name="publicUrl" value="${esc(s.publicUrl || '')}" placeholder="${esc(s.detectedUrl || 'https://…')}">
+          <div class="fh">${esc(t('set.publicUrlHint', { url: s.detectedUrl || '' }))}</div>
+          ${insecureRedirect(s.redirectUri) ? `<p class="error">${esc(t('set.httpWarn'))}</p>` : ''}</div>
         <div class="field"><label for="redirectUri">${esc(t('set.redirectUri'))}</label>
           <div class="copy-row"><input id="redirectUri" readonly value="${esc(s.redirectUri)}"><button type="button" class="btn small" data-copy="redirectUri">${esc(t('set.copy'))}</button></div>
           <div class="fh">${esc(t('set.redirectUriHint'))}</div></div>
@@ -574,6 +581,7 @@ async function renderSettings() {
     try {
       await api('PUT', '/api/settings/notifications', {
         tenantId: f.tenantId.value.trim(), clientId: f.clientId.value.trim(),
+        publicUrl: f.publicUrl.value.trim(),                // boş: isteğin geldiği adres kullanılır
         workflowUrl: f.workflowUrl.value.trim() || null   // boş: kayıtlı adres değişmez
       });
       await renderSettings();

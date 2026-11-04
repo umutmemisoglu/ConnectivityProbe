@@ -42,6 +42,20 @@ public class NotificationModeTests
         Assert.Equal("https://ui.example", store.Current.WorkflowUrl);
     }
 
+    [Fact]
+    public void Public_url_comes_from_the_ui_or_the_configuration()
+    {
+        using var h = new Harness(o => o.PublicUrl = "https://cfg.example/");
+        var store = new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options));
+        Assert.Equal("https://cfg.example", store.Current.PublicUrl);          // sondaki / atılır
+
+        store.Save(null, null, null, "https://monitor.example/");
+        Assert.Equal("https://monitor.example", store.Current.PublicUrl);
+
+        store.Save(null, null, null, "");                                     // boş = yapılandırmadaki değere dön
+        Assert.Equal("https://cfg.example", store.Current.PublicUrl);
+    }
+
     private static readonly Dictionary<string, object?> Card = new() { ["type"] = "AdaptiveCard" };
 
     [Fact]
