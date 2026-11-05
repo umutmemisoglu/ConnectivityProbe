@@ -309,16 +309,56 @@ Her bağlantıda TCP testine ek olarak:
 
 ## Ayarlardaki bağımlılıklar (2.2+)
 
-Pod'a uygulamanın ayar adresini (ya da ayarların kendisini) verirseniz, ayarlardaki veritabanları, kuyruklar ve servis
-adresleri Monitor'de kendiliğinden tanımlanır; değişiklikler takip edilir.
+Pod'a uygulamanın ayarlarını verirseniz, ayarlardaki veritabanları, kuyruklar ve servis adresleri Monitor'de kendiliğinden
+tanımlanır; değişiklikler takip edilir.
+
+### Ayarlar nereden verilir
+
+Ayarlar **`Start`'ın dördüncü parametresinde** (seçenek bloğu) verilir. `Start`'ın kendisi değişmedi; bunlardan hiçbiri
+verilmezse ayarlardan tespit kapalıdır ve her şey önceki gibi çalışır. Üçünden **birini** kullanın:
+
+| Seçenek | Ne zaman | Pod ne yapar |
+|---|---|---|
+| `o.SettingsUrl` | Ayarlar JSON dönen bir adresten geliyorsa (ör. merkezi ayar servisi) | Adresi düz bir `GET` ile (ek başlık olmadan) her `SettingsRefreshMinutes` dakikada bir okur |
+| `o.SettingsJson` | Ayarlar elinizde JSON metni olarak varsa | Metni tarar |
+| `o.Settings` | Uygulama ayarlarını zaten bir nesneye okuduysa (ör. `RemoteSettings`, `IOptions<T>.Value`) | Nesneyi bellekte JSON'a çevirip tarar |
+
+Birden fazlası verilirse önce `SettingsJson`, sonra `Settings`, sonra `SettingsUrl` kullanılır.
+
+**1. Ayar adresi** (ASP.NET Core; adres yapılandırmadan gelir, böylece aynı kod her ortamda çalışır):
 
 ```csharp
-ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
-{
-    o.SettingsUrl = "https://settings.example.com/api/settings/obj/<id>?version=1.0.0";   // GET, JSON döner
-    // ya da: o.SettingsJson = json;       ya da: o.Settings = remoteSettings;   (uygulamanın zaten okuduğu nesne)
-});
+ConnectivityProbeAgent.Start(
+    monitorUrl: builder.Configuration["ConnectivityProbe:MonitorUrl"]!,
+    appKey:     "orders-api",
+    appName:    "Orders API",
+    configure:  o => o.SettingsUrl = builder.Configuration["SettingsFullUrl"]);   // ör. https://settings.example.com/api/settings/obj/<id>?version=1.0.0
 ```
+
+**2. JSON metni** (ör. pod'a bağlanan bir dosya ya da zaten indirdiğiniz metin):
+
+```csharp
+ConnectivityProbeAgent.Start(monitorUrl, "orders-api", "Orders API",
+    o => o.SettingsJson = File.ReadAllText("/config/settings.json"));
+```
+
+**3. Uygulamanın zaten okuduğu ayar nesnesi** (uygulama ayarlarını açılışta zaten indiriyorsa önerilen yol: ayar servisi
+ikinci kez çağrılmaz, adresi de koda ikinci kez yazılmaz):
+
+```csharp
+var remoteSettings = LoadRemoteSettings();                 // uygulamanın kendi kodu
+builder.Services.AddSingleton<IRemoteSettings>(remoteSettings);
+
+ConnectivityProbeAgent.Start(monitorUrl, "orders-api", "Orders API",
+    o => o.Settings = remoteSettings);
+```
+
+`Settings` / `SettingsJson` ile açılışta verilen değer kullanılır; yeniden başlatmadan değişiklikleri takip etmek için
+`SettingsUrl` kullanın. İlgili diğer seçenek: `SettingsRefreshMinutes` (varsayılan 10).
+
+Nerede görülür: sonuç değiştiğinde pod konsola tek satır yazar, ör.
+`[ConnectivityProbe] Settings: 4 dependencies found (1 postgresql, 1 rabbitmq, 1 http, 1 mongodb).` Monitor'de
+**Tanımlar → uygulamanın kartı → ⚙ Ayarlardan bulunanlar** bölümünü açın.
 
 **Güvenlik:** Ayarlar **yalnızca pod'da** okunur. Monitor'e yalnızca ayarın adı, tür, sunucu, port ve TLS bilgisi gider;
 şifre, kullanıcı adı, anahtar ve ayar adresinin kendisi hiçbir zaman gitmez. Adı password / secret / token / key olan
