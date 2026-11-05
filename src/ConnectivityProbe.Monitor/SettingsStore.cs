@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Options;
 
 namespace ConnectivityProbe.Monitor;
@@ -26,23 +25,22 @@ public sealed class NotifySettings
 }
 
 /// <summary>
-/// Kurulum ayarlarını veri klasöründe (data/settings.json) tutar. Arayüzden girilen değer, appsettings / ortam değişkenindeki
-/// değerin (Monitor:Auth:*, Monitor:Notifications:WorkflowUrl) önüne geçer; arayüzde boş bırakılan alan için o değer kullanılır.
+/// Kurulum ayarlarını depolamada ("settings": dosya veya MongoDB) tutar. Arayüzden girilen değer, appsettings / ortam
+/// değişkenindeki değerin (Monitor:Auth:*, Monitor:Notifications:WorkflowUrl) önüne geçer; arayüzde boş bırakılan alan için o
+/// değer kullanılır.
 /// </summary>
 public sealed class SettingsStore
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-
     private readonly object _gate = new();
-    private readonly string _path;
+    private readonly IMonitorStorage _storage;
     private readonly MonitorOptions _config;
     private NotifySettings _saved;
 
-    public SettingsStore(DefinitionStore definitions, IOptions<MonitorOptions> options)
+    public SettingsStore(IMonitorStorage storage, IOptions<MonitorOptions> options)
     {
-        _path = Path.Combine(Path.GetDirectoryName(definitions.FilePath)!, "settings.json");
+        _storage = storage;
         _config = options.Value;
-        _saved = File.Exists(_path) ? JsonSerializer.Deserialize<NotifySettings>(File.ReadAllText(_path), Json) ?? new() : new();
+        _saved = storage.LoadDocument<NotifySettings>("settings") ?? new();
     }
 
     /// <summary>Ayar değiştiğinde (ör. Microsoft girişinin yeniden yapılandırılması için).</summary>
@@ -78,10 +76,7 @@ public sealed class SettingsStore
             if (clientId != null) _saved.ClientId = clientId.Trim();
             if (workflowUrl != null) _saved.WorkflowUrl = workflowUrl.Trim();
             if (publicUrl != null) _saved.PublicUrl = publicUrl.Trim().TrimEnd('/');
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(_saved, Json));
-            AtomicFile.Replace(tmp, _path);
+            _storage.SaveDocument("settings", _saved);
         }
         Changed?.Invoke();
     }

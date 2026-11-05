@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace ConnectivityProbe.Monitor;
 
 /// <summary>Bir uygulamanın kalıcı olarak saklanan pod bilgisi.</summary>
@@ -16,21 +14,18 @@ public sealed class PersistedAppPods
 }
 
 /// <summary>
-/// Monitor'ün her uygulama için hatırladığı pod'ları diske yazar (data/pod-state.json). Böylece "eksik" pod'lar Monitor
+/// Monitor'ün her uygulama için hatırladığı pod'ları depolamaya (dosya veya MongoDB) yazar. Böylece "eksik" pod'lar Monitor
 /// yeniden başlasa bile kaybolmaz; yalnızca arayüzdeki "Pod listesini sıfırla" ile silinir.
 /// </summary>
 public sealed class PodStateStore
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-
     private readonly object _gate = new();
-    private readonly string _path;
+    private readonly IMonitorStorage _storage;
     private readonly ILogger<PodStateStore> _log;
 
-    public PodStateStore(DefinitionStore definitions, ILogger<PodStateStore> log)
+    public PodStateStore(IMonitorStorage storage, ILogger<PodStateStore> log)
     {
-        // Tanım dosyasıyla aynı klasörde tutuyoruz.
-        _path = Path.Combine(Path.GetDirectoryName(definitions.FilePath)!, "pod-state.json");
+        _storage = storage;
         _log = log;
     }
 
@@ -38,13 +33,12 @@ public sealed class PodStateStore
     {
         try
         {
-            if (!File.Exists(_path)) return new();
-            return JsonSerializer.Deserialize<Dictionary<string, PersistedAppPods>>(File.ReadAllText(_path), Json) ?? new();
+            return _storage.LoadPods();
         }
         catch (Exception ex)
         {
-            // Bozuk dosya Monitor'ün açılmasını engellemesin; pod'lar bir sonraki bildirimde yeniden görülür.
-            _log.LogWarning(ex, "Pod state file could not be read: {Path}", _path);
+            // Bozuk kayıt Monitor'ün açılmasını engellemesin; pod'lar bir sonraki bildirimde yeniden görülür.
+            _log.LogWarning(ex, "Pod state could not be read from {Storage}", _storage.Description);
             return new();
         }
     }
@@ -55,15 +49,11 @@ public sealed class PodStateStore
         {
             try
             {
-                // Önce geçici dosyaya yazıp sonra yer değiştiriyoruz; yazma sırasında kapanırsa dosya bozulmaz.
-                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                var tmp = _path + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(state, Json));
-                AtomicFile.Replace(tmp, _path);
+                _storage.SavePods(state);
             }
             catch (Exception ex)
             {
-                _log.LogWarning(ex, "Pod state file could not be written: {Path}", _path);
+                _log.LogWarning(ex, "Pod state could not be written to {Storage}", _storage.Description);
             }
         }
     }

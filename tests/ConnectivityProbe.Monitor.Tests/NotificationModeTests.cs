@@ -17,7 +17,7 @@ public class NotificationModeTests
     public void Setup_is_ready_only_with_sign_in_and_workflow(string? workflow, string? tenant, string? client, bool expected)
     {
         using var h = new Harness(o => { o.Notifications.WorkflowUrl = workflow; o.Auth.TenantId = tenant; o.Auth.ClientId = client; });
-        Assert.Equal(expected, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)).Current.Ready);
+        Assert.Equal(expected, new SettingsStore(h.Storage, Microsoft.Extensions.Options.Options.Create(h.Options)).Current.Ready);
     }
 
     [Fact]
@@ -25,13 +25,13 @@ public class NotificationModeTests
     {
         using var h = new Harness(o => { o.Auth.TenantId = "cfg-tenant"; o.Notifications.WorkflowUrl = "https://cfg.example"; });
         var options = Microsoft.Extensions.Options.Options.Create(h.Options);
-        var store = new SettingsStore(h.Store, options);
+        var store = new SettingsStore(h.Storage, options);
         var changed = 0;
         store.Changed += () => changed++;
 
         store.Save("ui-tenant", "ui-client", null);                 // iş akışı adresi gönderilmedi: değişmez
         Assert.Equal(1, changed);
-        var reloaded = new SettingsStore(h.Store, options).Current;
+        var reloaded = new SettingsStore(h.Storage, options).Current;
         Assert.Equal("ui-tenant", reloaded.TenantId);
         Assert.Equal("ui-client", reloaded.ClientId);
         Assert.Equal("https://cfg.example", reloaded.WorkflowUrl);
@@ -47,7 +47,7 @@ public class NotificationModeTests
     {
         // Entra ID belirteçteki "aud" değerini küçük harfle yazar; büyük harfle girilen Client ID girişi bozmamalı.
         using var h = new Harness();
-        var store = new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options));
+        var store = new SettingsStore(h.Storage, Microsoft.Extensions.Options.Options.Create(h.Options));
         store.Save("4CBBF06E-35AF-4376-A318-F74D530C8183", " B425C86A-BB51-4FD3-82A4-DA274E3DCA57 ", null);
         Assert.Equal("4cbbf06e-35af-4376-a318-f74d530c8183", store.Current.TenantId);
         Assert.Equal("b425c86a-bb51-4fd3-82a4-da274e3dca57", store.Current.ClientId);
@@ -57,7 +57,7 @@ public class NotificationModeTests
     public void Public_url_comes_from_the_ui_or_the_configuration()
     {
         using var h = new Harness(o => o.PublicUrl = "https://cfg.example/");
-        var store = new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options));
+        var store = new SettingsStore(h.Storage, Microsoft.Extensions.Options.Options.Create(h.Options));
         Assert.Equal("https://cfg.example", store.Current.PublicUrl);          // sondaki / atılır
 
         store.Save(null, null, null, "https://monitor.example/");
@@ -141,7 +141,7 @@ public class NotificationModeTests
     {
         using var h = new Harness(o => o.Notifications.WorkflowUrl = "https://flow.example/hook");
         var sender = new FakeSender();
-        var service = new NotificationService(h.Store, new SettingsStore(h.Store, Microsoft.Extensions.Options.Options.Create(h.Options)), sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
+        var service = new NotificationService(h.Storage, new SettingsStore(h.Storage, Microsoft.Extensions.Options.Options.Create(h.Options)), sender, Microsoft.Extensions.Options.Options.Create(h.Options), NullLogger<NotificationService>.Instance);
         var app = h.AddApp("orders", new ConnectionDefinition { Id = "db", Name = "Ana DB", Host = "sql01", Port = 1433 });
         h.Store.Mutate(d =>
         {

@@ -38,12 +38,30 @@ public sealed class MonitorOptions
     /// </summary>
     public string? PublicUrl { get; set; }
 
+    /// <summary>MongoDB (isteğe bağlı): bağlantı adresi verilirse veriler dosyalar yerine Mongo'ya yazılır.</summary>
+    public MongoOptions Mongo { get; set; } = new();
+
     /// <summary>Teams bildirimleri: arayüzdeki Ayarlar boşsa kullanılan varsayılan (bkz. SettingsStore).</summary>
     public NotificationOptions Notifications { get; set; } = new();
 
     /// <summary>Microsoft (Entra ID) ile giriş: arayüzdeki Ayarlar boşsa kullanılan varsayılan (bkz. SettingsStore).</summary>
     public AuthOptions Auth { get; set; } = new();
 
+}
+
+/// <summary>"Monitor:Mongo" bölümü.</summary>
+public sealed class MongoOptions
+{
+    /// <summary>
+    /// MongoDB bağlantı adresi (mongodb://... veya mongodb+srv://...). Şifre içerdiği için gizlidir: appsettings'e yazmayın,
+    /// ortam değişkeniyle (secret) verin: Monitor__Mongo__ConnectionString. Boşsa veriler dosyalara yazılır (Monitor:DataFile).
+    /// </summary>
+    public string? ConnectionString { get; set; }
+
+    /// <summary>Veritabanı adı. Varsayılan: connectivity_monitor.</summary>
+    public string Database { get; set; } = "connectivity_monitor";
+
+    public bool Enabled => !string.IsNullOrWhiteSpace(ConnectionString);
 }
 
 /// <summary>"Monitor:Notifications" bölümü.</summary>

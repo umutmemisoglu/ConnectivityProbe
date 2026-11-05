@@ -22,6 +22,7 @@ internal sealed class Harness : IDisposable
     public readonly ManualTime Time = new();
     public readonly string Dir = Directory.CreateTempSubdirectory("cpmon").FullName;
     public readonly MonitorOptions Options = new() { IntervalSeconds = 30, MissingAfterCycles = 3 };
+    public IMonitorStorage Storage { get; }
     public DefinitionStore Store { get; }
     public MonitorService Monitor { get; }
 
@@ -30,9 +31,9 @@ internal sealed class Harness : IDisposable
         configure?.Invoke(Options);
         Options.DataFile = Path.Combine(Dir, "definitions.json");
         if (definitionsJson != null) File.WriteAllText(Options.DataFile, definitionsJson);
-        var env = new HostingEnvironment { ContentRootPath = Dir };
-        Store = new DefinitionStore(Microsoft.Extensions.Options.Options.Create(Options), env);
-        Monitor = new MonitorService(Store, new PodStateStore(Store, NullLogger<PodStateStore>.Instance),
+        Storage = new FileStorage(Options.DataFile);
+        Store = new DefinitionStore(Storage);
+        Monitor = new MonitorService(Store, new PodStateStore(Storage, NullLogger<PodStateStore>.Instance),
             Microsoft.Extensions.Options.Options.Create(Options), NullLogger<MonitorService>.Instance, Time);
     }
 

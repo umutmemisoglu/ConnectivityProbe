@@ -15,6 +15,20 @@ var builder = WebApplication.CreateBuilder(args);
 
 // step 1: Ayarları, tanım deposunu ve arka planda periyodik test yapan servisi ekliyoruz.
 builder.Services.Configure<MonitorOptions>(builder.Configuration.GetSection("Monitor"));
+
+// step 1a: Kalıcı verilerin yeri: Monitor:Mongo:ConnectionString verilmişse MongoDB, yoksa veri klasöründeki dosyalar.
+//          Mongo ilk kez kullanılıyorsa dosyalardaki veriler oraya aktarılır. Mongo'ya erişilemezse Monitor açılmaz.
+var startupOptions = builder.Configuration.GetSection("Monitor").Get<MonitorOptions>() ?? new MonitorOptions();
+var fileStorage = FileStorage.From(startupOptions, builder.Environment.ContentRootPath);
+MongoStorage? mongoStorage = null;
+if (startupOptions.Mongo.Enabled)
+{
+    mongoStorage = new MongoStorage(startupOptions.Mongo.ConnectionString!, startupOptions.Mongo.Database);
+    using var importLog = LoggerFactory.Create(l => l.AddConsole());
+    mongoStorage.ImportFromFilesIfEmpty(fileStorage, importLog.CreateLogger("Storage"));
+}
+IMonitorStorage storage = mongoStorage is not null ? mongoStorage : fileStorage;
+builder.Services.AddSingleton(storage);
 builder.Services.AddSingleton<DefinitionStore>();
 builder.Services.AddSingleton<PodStateStore>();
 builder.Services.AddSingleton<SettingsStore>();     // Teams bildirimlerinin kurulum ayarları (data/settings.json)   // görülen / eksik pod'lar diske yazılır (data/pod-state.json)
@@ -25,11 +39,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<NotificationServic
 builder.Services.AddSingleton<MonitorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MonitorService>());
 
-// step 1b: Arayüz girişi (çerez). Çerezi şifreleyen anahtarlar veri klasöründe tutulur; Monitor yeniden başlayınca
-//          kullanıcıların tekrar giriş yapması gerekmez.
-var dataFile = builder.Configuration["Monitor:DataFile"] ?? "data/definitions.json";
-var dataDir = Path.GetDirectoryName(Path.IsPathRooted(dataFile) ? dataFile : Path.Combine(builder.Environment.ContentRootPath, dataFile))!;
-builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDir, "keys")));
+// step 1b: Arayüz girişi (çerez). Çerezi şifreleyen anahtarlar kalıcı tutulur (Mongo'da ya da veri klasöründe); Monitor
+//          yeniden başlayınca kullanıcıların tekrar giriş yapması gerekmez.
+var dataProtection = builder.Services.AddDataProtection();
+if (mongoStorage is not null)
+    builder.Services.Configure<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>(o => o.XmlRepository = mongoStorage.KeyRepository);
+else
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(fileStorage.DataDirectory, "keys")));
 var authentication = builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(o =>
 {
     o.Cookie.Name = "cpmonitor";
@@ -97,6 +113,7 @@ var monitorOptions = app.Services.GetRequiredService<IOptions<MonitorOptions>>()
 var loginRequired = !string.IsNullOrEmpty(monitorOptions.AdminPassword);
 if (!loginRequired)
     app.Logger.LogWarning("Monitor:AdminPassword is not set: the UI is open to everyone who can reach the Monitor.");
+app.Logger.LogInformation("Data storage: {Storage}", storage.Description);
 
 // step 2: Erişim kapısı.
 //   - /api/agent/*: Strict pod'ların uçları; giriş değil uygulama anahtarı (X-ConnectivityProbe-AppKey) ister.

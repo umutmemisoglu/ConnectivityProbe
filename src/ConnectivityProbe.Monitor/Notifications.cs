@@ -41,7 +41,6 @@ public sealed class NotificationService : BackgroundService
 {
     private sealed record Outgoing(PersonDefinition Person, NotifyBatch Batch, DateTime AtUtc);
 
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30) };
 
     private readonly NotificationEngine _engine;
@@ -49,24 +48,23 @@ public sealed class NotificationService : BackgroundService
     private readonly SettingsStore _settings;
     private readonly ILogger<NotificationService> _log;
     private readonly Channel<Outgoing> _queue = Channel.CreateUnbounded<Outgoing>();
-    private readonly string _statePath;
+    private readonly IMonitorStorage _storage;
     private readonly object _gate = new();
     private DateTime _lastSave;
 
-    public NotificationService(DefinitionStore store, SettingsStore settings, INotificationSender sender,
+    public NotificationService(IMonitorStorage storage, SettingsStore settings, INotificationSender sender,
         Microsoft.Extensions.Options.IOptions<MonitorOptions> options, ILogger<NotificationService> log)
     {
         _engine = new NotificationEngine(TimeSpan.FromSeconds(Math.Max(5, options.Value.IntervalSeconds)));
         _settings = settings;
         _sender = sender;
         _log = log;
-        _statePath = Path.Combine(Path.GetDirectoryName(store.FilePath)!, "notify-state.json");
+        _storage = storage;
         try
         {
-            if (File.Exists(_statePath))
-                _engine.Import(JsonSerializer.Deserialize<NotificationEngine.State>(File.ReadAllText(_statePath), Json) ?? new());
+            if (storage.LoadDocument<NotificationEngine.State>("notify-state") is { } state) _engine.Import(state);
         }
-        catch (Exception ex) when (ex is IOException or JsonException)
+        catch (Exception ex)
         {
             _log.LogWarning(ex, "Notification state could not be read; starting fresh");
         }
@@ -144,13 +142,12 @@ public sealed class NotificationService : BackgroundService
         _lastSave = now;
         try
         {
-            var tmp = _statePath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(_engine.Export(), Json));
-            AtomicFile.Replace(tmp, _statePath);
+            _storage.SaveDocument("notify-state", _engine.Export());
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
-            _log.LogWarning(ex, "Notification state could not be saved");
+            // Kaydedilemezse bildirimler sürer; yalnızca Monitor yeniden başlarsa açık olaylar unutulur.
+            _log.LogWarning(ex, "Notification state could not be saved to {Storage}", _storage.Description);
         }
     }
 }
