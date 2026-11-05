@@ -313,16 +313,56 @@ For every connection, in addition to the TCP test:
 
 ## Dependencies from settings (2.2+)
 
-Give the pod the address of the application's settings (or the settings themselves) and the databases, queues and service
-addresses in them are defined in the Monitor automatically; changes are tracked.
+Give the pod the application's settings and the databases, queues and service addresses in them are defined in the Monitor
+automatically; changes are tracked.
+
+### Where to give the settings
+
+The settings are given in the **fourth parameter of `Start`** (the options block). `Start` itself does not change; if
+none of these is set, discovery is simply off and everything works as before. Use **one** of the three:
+
+| Option | Give it when | What the pod does |
+|---|---|---|
+| `o.SettingsUrl` | The settings come from a URL that returns JSON (e.g. a central settings service) | Reads the URL with a plain `GET` (no extra headers), every `SettingsRefreshMinutes` |
+| `o.SettingsJson` | You already have the settings as JSON text | Scans the text |
+| `o.Settings` | The application already loaded its settings into an object (e.g. `RemoteSettings`, `IOptions<T>.Value`) | Converts the object to JSON in memory and scans it |
+
+If more than one is set, `SettingsJson` wins, then `Settings`, then `SettingsUrl`.
+
+**1. A settings URL** (ASP.NET Core, the URL comes from configuration, so the same code works in every environment):
 
 ```csharp
-ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
-{
-    o.SettingsUrl = "https://settings.example.com/api/settings/obj/<id>?version=1.0.0";   // GET, returns JSON
-    // or: o.SettingsJson = json;          or: o.Settings = remoteSettings;   (an object the app already loaded)
-});
+ConnectivityProbeAgent.Start(
+    monitorUrl: builder.Configuration["ConnectivityProbe:MonitorUrl"]!,
+    appKey:     "orders-api",
+    appName:    "Orders API",
+    configure:  o => o.SettingsUrl = builder.Configuration["SettingsFullUrl"]);   // e.g. https://settings.example.com/api/settings/obj/<id>?version=1.0.0
 ```
+
+**2. JSON text** (e.g. a file mounted into the pod, or a string you already downloaded):
+
+```csharp
+ConnectivityProbeAgent.Start(monitorUrl, "orders-api", "Orders API",
+    o => o.SettingsJson = File.ReadAllText("/config/settings.json"));
+```
+
+**3. The settings object the application already loaded** (recommended when the application downloads its settings at
+startup anyway: the settings service is not called a second time and its URL does not have to appear in the code again):
+
+```csharp
+var remoteSettings = LoadRemoteSettings();                 // the application's own code
+builder.Services.AddSingleton<IRemoteSettings>(remoteSettings);
+
+ConnectivityProbeAgent.Start(monitorUrl, "orders-api", "Orders API",
+    o => o.Settings = remoteSettings);
+```
+
+With `Settings` / `SettingsJson` the value is the one given at startup; to follow changes without a restart, use
+`SettingsUrl`. Other related options: `SettingsRefreshMinutes` (default 10).
+
+What you see: the pod writes one console line when the result changes, e.g.
+`[ConnectivityProbe] Settings: 4 dependencies found (1 postgresql, 1 rabbitmq, 1 http, 1 mongodb).` In the Monitor, open
+**Definitions → the application's card → ⚙ Found in settings**.
 
 **Security:** the settings are read **only in the pod**. Only the setting's name, type, server, port and TLS go to the
 Monitor; passwords, user names, keys and the settings address itself never do. Fields named password / secret / token /
