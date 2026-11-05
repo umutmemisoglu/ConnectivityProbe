@@ -32,6 +32,14 @@ That's all. Every pod then:
 - checks **TLS certificates** (expiry, name, trust) of `https://` / TLS targets and measures DNS time (2.1+),
 - says goodbye on shutdown, so deploys and scale-downs raise no alarm.
 
+Optionally give the application's settings and its dependencies are defined in the Monitor automatically (2.2+); only
+type, server and port leave the pod, never passwords:
+
+```csharp
+ConnectivityProbe.ConnectivityProbeAgent.Start(monitorUrl, appKey, "Orders API",
+    o => o.SettingsUrl = "https://settings.example.com/api/settings/obj/<id>");   // or SettingsJson / Settings
+```
+
 If the Monitor cannot be reached, your application is not affected: the library writes a short English line to the
 console (`[ConnectivityProbe] Could not connect to monitor ...`) and keeps trying.
 
@@ -52,7 +60,9 @@ ConnectivityProbe.ConnectivityProbeAgent.Start("https://monitor.example.com", "o
 ```
 
 Anahtarı siz belirlersiniz; ilk pod uygulamayı Monitor'e kendiliğinden kaydeder. Bağlantılar Monitor'de tanımlanır, her pod
-kendi içinden test eder. Monitor'e ulaşılamazsa uygulama etkilenmez, konsola kısa bir İngilizce mesaj yazılır. Ayrıntılı
+kendi içinden test eder. İsteğe bağlı olarak uygulamanın ayarlarını verirseniz (`SettingsUrl` / `SettingsJson` / `Settings`,
+2.2+) ayarlardaki veritabanları, kuyruklar ve servisler Monitor'de kendiliğinden tanımlanır; pod'dan yalnızca tür, sunucu ve
+port çıkar, şifreler çıkmaz. Monitor'e ulaşılamazsa uygulama etkilenmez, konsola kısa bir İngilizce mesaj yazılır. Ayrıntılı
 anlatım: **[Türkçe dokümantasyon](https://github.com/umutmemisoglu/ConnectivityProbe/blob/main/README.tr.md)**.
 
 License / Lisans: MIT © 2026 Fatih Umut Memişoğlu

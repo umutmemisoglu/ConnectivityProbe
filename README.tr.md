@@ -33,6 +33,7 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 - [Sürümler ve build'ler](#sürümler-ve-buildler)
 - [Cluster'lar (ağlar)](#clusterlar-ağlar)
 - [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)
+- [Ayarlardaki bağımlılıklar](#ayarlardaki-bağımlılıklar-22)
 - [Konsol mesajları](#konsol-mesajları)
 - [Seçenekler](#seçenekler)
 - [Güvenlik](#güvenlik)
@@ -306,6 +307,51 @@ Her bağlantıda TCP testine ek olarak:
 
 ---
 
+## Ayarlardaki bağımlılıklar (2.2+)
+
+Pod'a uygulamanın ayar adresini (ya da ayarların kendisini) verirseniz, ayarlardaki veritabanları, kuyruklar ve servis
+adresleri Monitor'de kendiliğinden tanımlanır; değişiklikler takip edilir.
+
+```csharp
+ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
+{
+    o.SettingsUrl = "https://settings.example.com/api/settings/obj/<id>?version=1.0.0";   // GET, JSON döner
+    // ya da: o.SettingsJson = json;       ya da: o.Settings = remoteSettings;   (uygulamanın zaten okuduğu nesne)
+});
+```
+
+**Güvenlik:** Ayarlar **yalnızca pod'da** okunur. Monitor'e yalnızca ayarın adı, tür, sunucu, port ve TLS bilgisi gider;
+şifre, kullanıcı adı, anahtar ve ayar adresinin kendisi hiçbir zaman gitmez. Adı password / secret / token / key olan
+alanlara hiç bakılmaz.
+
+**Adresler nasıl tanınır (yapay zekâ yok, yalnızca kurallar):**
+
+1. **Adaylar:** bağlantı metinleri (`Host=..;` PostgreSQL, `Server=..;Initial Catalog=..` SQL Server, `Uid=` MySQL,
+   `(HOST=..)(PORT=..)` Oracle, `host:6379,ssl=true` Redis), adresler (`https://`, `mongodb://`, `amqp(s)://`, `redis(s)://`,
+   `postgres://`, `mysql://`, `kafka://`, `ldap(s)://`, `smtp(s)://`...), `host:port` ve `h1:9092,h2:9092` listeleri,
+   aynı nesnedeki host + port alanları (`{"Host": "mq01", "Port": 0}`, `SmtpServer` + `SmtpPort`).
+2. **Tür:** şemadan, bağlantı metninden, porttan (5672 RabbitMQ, 9092 Kafka, 27017 MongoDB, 5601 Kibana, 9200
+   Elasticsearch, 6379 Redis...), ayarın adından (`RabbitMQSettings`, `KibanaUrl`) ve sunucu adından anlaşılır. Port yoksa
+   ya da `0` ise türün varsayılanı kullanılır (RabbitMQ 5672). Kesin biçimler **kesin** sayılır ve kendiliğinden eklenir.
+   Yalnızca adrese benzeyen değerler (ör. `"Endpoint": "srv01:8080"`) **öneri** olur, onaylarsanız eklenir. DNS'te
+   çözülmeyen adlar elenir. `localhost`, örnek alan adları ve şema adresleri yok sayılır.
+3. **Doğrulama (isteğe bağlı, Monitor'de uygulama bazında):** Pod her adrese bağlanıp o protokolün zararsız "merhaba"sını
+   gönderir (AMQP başlığı, Kafka ApiVersions, MongoDB `hello`, Redis `PING`, PostgreSQL SSLRequest, SQL Server PRELOGIN,
+   HTTP `GET /` → Kibana / Elasticsearch / RabbitMQ yönetim ekranı...). Tür sunucunun cevabından alınır; doğrulanan öneri
+   kendiliğinden eklenir, hiç bağlanılamayan belirsiz adres elenir. Kimlik bilgisi gönderilmez, veri okunmaz. **Kesin
+   bağımlılıklar asla elenmez:** erişilemeyen bir veritabanı tam da izlenmesi gereken durumdur.
+
+**Monitor'de** (Tanımlar → uygulama kartı → ⚙ Ayarlardan bulunanlar):
+
+- Yeni adres: havuzda aynı host:port'a giden bağlantı varsa o kullanılır, yoksa bağlantı oluşturulur (⚙ işaretli) ve atanır.
+- Değişen adres (aynı ayar, yeni sunucu): eski bağlantı uygulamadan çıkarılır, yenisi atanır. Kaldırılan ayar: çıkarılır.
+  Ayarlardan oluşturulmuş ve artık kimsenin kullanmadığı bağlantılar havuzdan silinir; elle eklenenlere dokunulmaz.
+- Her ekleme / değişiklik / kaldırma kartta geçmiş olarak görünür.
+- Sizin kaldırdığınız bir bağımlılık bir daha eklenmez ("Yok sayılanlar" altında, "Tekrar ekle" ile geri alınır).
+- Ayarlar `SettingsRefreshMinutes` (10) dakikada bir yeniden okunur. Okuma başarısız olursa önceki sonuç geçerli kalır
+  (uyarıyla gösterilir).
+- Deploy sırasında yalnızca en son başlayan pod'un ayarları uygulanır; eski pod'lar tanımları geri alamaz.
+
 ## Konsol mesajları
 
 Kütüphane hiçbir zaman hata fırlatmaz, stack trace yazmaz. Konsola (ve `System.Diagnostics.Trace`'e) `[ConnectivityProbe]`
@@ -340,6 +386,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `TimeoutMs` | Monitor'ünki (5000) | Tek bağlantı denemesinin (ve DNS çözümlemesinin) zaman aşımı. |
 | `MaxAddresses` | 64 | Bir host adı için test edilen en fazla IP. |
 | `MaxParallelTests` | 4 | Bir pod'da aynı anda test edilen bağlantı sayısı. |
+| `SettingsUrl` / `SettingsJson` / `Settings` | — | Uygulamanın ayarları: içindeki bağımlılıklar Monitor'de kendiliğinden tanımlanır (bkz. [Ayarlardaki bağımlılıklar](#ayarlardaki-bağımlılıklar-22)). |
+| `SettingsRefreshMinutes` | 10 | Ayarların yeniden okunma aralığı (dk). |
 
 `ConnectivityProbeAgent.Current` çalışan agent'ı döner (süreç başına bir tane); `LastContactUtc`, `LastRunUtc`,
 `LastError` ve `AppId` özelliklerini sunar.
@@ -479,7 +527,8 @@ Adımlar:
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **2.1.0** | Pod kaynakları (CPU, bellek ve limitler, throttling, OOM, thread'ler, TCP soketleri), TLS / sertifika kontrolü, DNS süresi, yavaşlama ve yeniden başlama tespiti. Pod'lar kendi IP adresini bildirir (`POD_IP` veya Monitor'e giden yol); Monitor cluster'ları pod ağıyla adlandırır (ör. `10.42.0.0/16`). Monitor: sürümler ve ağ gruplaması detay penceresinde, Türkçe / İngilizce arayüz. |
+| **2.2.0** | Ayarlardaki bağımlılıklar: `SettingsUrl` / `SettingsJson` / `Settings` verilirse içindeki veritabanları, kuyruklar ve servisler Monitor'de kendiliğinden tanımlanır (pod'dan yalnızca tür, sunucu ve port çıkar); değişiklik takibi ve isteğe bağlı protokol doğrulaması (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: isteğe bağlı MongoDB depolama. |
+| 2.1.0 | Pod kaynakları (CPU, bellek ve limitler, throttling, OOM, thread'ler, TCP soketleri), TLS / sertifika kontrolü, DNS süresi, yavaşlama ve yeniden başlama tespiti. Pod'lar kendi IP adresini bildirir (`POD_IP` veya Monitor'e giden yol); Monitor cluster'ları pod ağıyla adlandırır (ör. `10.42.0.0/16`). Monitor: sürümler ve ağ gruplaması detay penceresinde, Türkçe / İngilizce arayüz. |
 | 2.0.0 | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |
 | 1.1.0 | Strict mod: pod'lar uygulama anahtarıyla tanımlarını çeker, içeriden test eder ve sonucu gönderir. |
 | 1.0.0 | İlk sürüm: `discover` ve `identity` uçları. |

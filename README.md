@@ -34,6 +34,7 @@ one screen.
 - [Versions and builds](#versions-and-builds)
 - [Clusters (networks)](#clusters-networks)
 - [Resources, TLS and latency](#resources-tls-and-latency-21)
+- [Dependencies from settings](#dependencies-from-settings-22)
 - [Console messages](#console-messages)
 - [Options](#options)
 - [Security](#security)
@@ -310,6 +311,52 @@ For every connection, in addition to the TCP test:
 
 ---
 
+## Dependencies from settings (2.2+)
+
+Give the pod the address of the application's settings (or the settings themselves) and the databases, queues and service
+addresses in them are defined in the Monitor automatically; changes are tracked.
+
+```csharp
+ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
+{
+    o.SettingsUrl = "https://settings.example.com/api/settings/obj/<id>?version=1.0.0";   // GET, returns JSON
+    // or: o.SettingsJson = json;          or: o.Settings = remoteSettings;   (an object the app already loaded)
+});
+```
+
+**Security:** the settings are read **only in the pod**. Only the setting's name, type, server, port and TLS go to the
+Monitor; passwords, user names, keys and the settings address itself never do. Fields named password / secret / token /
+key are not even read.
+
+**How addresses are recognized (no AI, rules only):**
+
+1. **Candidates:** connection strings (`Host=..;` PostgreSQL, `Server=..;Initial Catalog=..` SQL Server, `Uid=` MySQL,
+   `(HOST=..)(PORT=..)` Oracle, `host:6379,ssl=true` Redis), URLs (`https://`, `mongodb://`, `amqp(s)://`, `redis(s)://`,
+   `postgres://`, `mysql://`, `kafka://`, `ldap(s)://`, `smtp(s)://`...), `host:port` and `h1:9092,h2:9092` lists, and
+   host + port fields in the same object (`{"Host": "mq01", "Port": 0}`, `SmtpServer` + `SmtpPort`).
+2. **Type:** from the scheme, the connection string, the port (5672 RabbitMQ, 9092 Kafka, 27017 MongoDB, 5601 Kibana, 9200
+   Elasticsearch, 6379 Redis...), the setting's name (`RabbitMQSettings`, `KibanaUrl`) and the server name. A missing or
+   `0` port becomes the type's default (RabbitMQ 5672). Unambiguous formats are **certain**: added automatically. Values
+   that only look like an address (e.g. `"Endpoint": "srv01:8080"`) are **suggestions**: added after you approve them.
+   Names that do not resolve in DNS are dropped. `localhost`, example domains and schema URLs are ignored.
+3. **Verification (optional, per application in the Monitor):** the pod connects to each address and sends that protocol's
+   harmless "hello" (AMQP header, Kafka ApiVersions, MongoDB `hello`, Redis `PING`, PostgreSQL SSLRequest, SQL Server
+   PRELOGIN, HTTP `GET /` → Kibana / Elasticsearch / RabbitMQ management...). The type is taken from the server's answer;
+   a verified suggestion is added automatically, an uncertain address that cannot be reached at all is dropped. No
+   credentials are sent and no data is read. **Certain dependencies are never dropped:** an unreachable database is
+   exactly what should be monitored.
+
+**In the Monitor** (Definitions → application card → ⚙ Found in settings):
+
+- A new address reuses the pool connection to the same host:port, otherwise a connection is created (marked ⚙) and attached.
+- Changed address (same setting, new server): the old connection is detached and the new one attached. Removed setting:
+  detached. Connections created from settings that nobody uses any more are removed from the pool; manually added ones
+  are never touched.
+- Every addition / change / removal is logged on the card.
+- What you remove yourself is not added again (listed under "Ignored", with "Add again").
+- Settings are re-read every `SettingsRefreshMinutes` (10). A failed read keeps the previous result (shown with a warning).
+- During a deploy only the most recently started pod's settings apply, so old pods cannot roll the definitions back.
+
 ## Console messages
 
 The library never throws and never writes a stack trace. It writes a few English lines to the console (and to
@@ -344,6 +391,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `TimeoutMs` | Monitor's (5000) | Timeout of one connection attempt (and DNS lookup). |
 | `MaxAddresses` | 64 | Maximum IPs tested for one host name. |
 | `MaxParallelTests` | 4 | Connections tested at the same time in one pod. |
+| `SettingsUrl` / `SettingsJson` / `Settings` | — | The application's settings: their dependencies are defined in the Monitor automatically (see [Dependencies from settings](#dependencies-from-settings-22)). |
+| `SettingsRefreshMinutes` | 10 | How often the settings are read again. |
 
 `ConnectivityProbeAgent.Current` returns the running agent (one per process); it exposes `LastContactUtc`, `LastRunUtc`,
 `LastError` and `AppId`.
@@ -485,7 +534,8 @@ Steps:
 
 | Version | Highlights |
 |---|---|
-| **2.1.0** | Pod resources (CPU, memory and limits, throttling, OOM, threads, TCP sockets), TLS / certificate checks, DNS time, slow-connection and restart detection. Pods report their own IP address (`POD_IP` or the route to the Monitor); the Monitor names clusters after the pod network (e.g. `10.42.0.0/16`). Monitor: versions and network grouping in the details window, Turkish / English UI. |
+| **2.2.0** | Dependencies from settings: give `SettingsUrl` / `SettingsJson` / `Settings` and the databases, queues and services in them are defined in the Monitor automatically (only type, server and port leave the pod), with change tracking and optional protocol-level verification (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: optional MongoDB storage. |
+| 2.1.0 | Pod resources (CPU, memory and limits, throttling, OOM, threads, TCP sockets), TLS / certificate checks, DNS time, slow-connection and restart detection. Pods report their own IP address (`POD_IP` or the route to the Monitor); the Monitor names clusters after the pod network (e.g. `10.42.0.0/16`). Monitor: versions and network grouping in the details window, Turkish / English UI. |
 | 2.0.0 | One line: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Automatic registration, application version / build per pod, automatic cluster grouping, no endpoints, no dependencies. |
 | 1.1.0 | Strict mode: pods pull their definitions with an app key, test from inside and report back. |
 | 1.0.0 | First release: `discover` and `identity` endpoints. |

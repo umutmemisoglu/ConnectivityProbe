@@ -39,5 +39,21 @@ namespace ConnectivityProbe
 
         /// <summary>Bir pod'da aynı anda test edilen en fazla bağlantı (hedeflere ani yük binmesin diye). Varsayılan: 4.</summary>
         public int MaxParallelTests { get; set; } = 4;
+
+        /// <summary>
+        /// Uygulamanın ayarlarını JSON olarak veren adres (ör. merkezi ayar servisi). Verilirse ayarlardaki bağımlılıklar
+        /// (veritabanları, kuyruklar, servis adresleri) bulunur ve Monitor'de kendiliğinden tanımlanır. Ayarlar yalnızca pod'da
+        /// okunur: Monitor'e yalnızca tür, host ve port gider; şifre, kullanıcı adı ve bu adresin kendisi gitmez. GET ile okunur.
+        /// </summary>
+        public string? SettingsUrl { get; set; }
+
+        /// <summary><see cref="SettingsUrl"/> yerine ayarların kendisi (JSON metni).</summary>
+        public string? SettingsJson { get; set; }
+
+        /// <summary><see cref="SettingsUrl"/> yerine uygulamanın zaten okuduğu ayar nesnesi (ör. RemoteSettings); JSON'a çevrilip taranır.</summary>
+        public object? Settings { get; set; }
+
+        /// <summary>Ayarların yeniden okunma aralığı (dk); değişen / eklenen / kaldırılan bağımlılıklar böyle fark edilir. Varsayılan: 10.</summary>
+        public int SettingsRefreshMinutes { get; set; } = 10;
     }
 }

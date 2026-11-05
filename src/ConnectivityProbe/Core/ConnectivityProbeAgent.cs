@@ -24,6 +24,8 @@ namespace ConnectivityProbe
         public AgentRun? Run { get; set; }
         /// <summary>Pod'un kaynak kullanımı (CPU, bellek, container limitleri, thread'ler, TCP soketleri).</summary>
         public ResourceSample? Resources { get; set; }
+        /// <summary>Ayarlardan bulunan bağımlılıklar (SettingsUrl / SettingsJson / Settings verildiyse; yalnızca tür, host, port).</summary>
+        public DiscoveredSettings? Settings { get; set; }
     }
 
     /// <summary>Bir pod'un bir test turu.</summary>
@@ -203,6 +205,9 @@ namespace ConnectivityProbe
 
             while (!ct.IsCancellationRequested)
             {
+                // step 0: Ayarlar verildiyse zamanı geldiğinde arka planda yeniden okunur (bildirimi geciktirmez).
+                StartSettingsRefreshIfDue(ct);
+
                 // step 1: Bildirim (ilkinde kayıt) gönderiyoruz; varsa son test sonuçları da gider. Yanıtta tanımlar ve test aralığı gelir.
                 Assignment? assignment = null;
                 try
@@ -212,6 +217,12 @@ namespace ConnectivityProbe
                     LastContactUtc = DateTime.UtcNow;
                     LastError = null;
                     AppId = assignment.AppId;
+                    if (assignment.VerifySettings != _verifySettings)
+                    {
+                        // Monitor'de "sunucu türünü doğrula" açıldı / kapandı: ayarlar hemen yeniden işlenir.
+                        _verifySettings = assignment.VerifySettings;
+                        _nextSettingsReadUtc = DateTime.MinValue;
+                    }
 
                     if (!everConnected)
                         Say("Registered to monitor " + _options.MonitorUrl + " as \"" + _options.AppKey + "\" ("
@@ -312,6 +323,152 @@ namespace ConnectivityProbe
             return result;
         }
 
+        // ------------------------------------------------------------------ ayarlardaki bağımlılıklar
+
+        private DiscoveredSettings? _settings;
+        private Task? _settingsTask;
+        private DateTime _nextSettingsReadUtc = DateTime.MinValue;
+        private bool _verifySettings;
+        // Doğrulama sonuçları (host:port:tls -> tür); her okumada tüm sunuculara yeniden bağlanmamak için.
+        private readonly Dictionary<string, VerifiedEndpoint> _verified = new Dictionary<string, VerifiedEndpoint>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class VerifiedEndpoint
+        {
+            public bool Open { get; set; }
+            public string? Kind { get; set; }
+            public DateTime AtUtc { get; set; }
+        }
+
+        private bool SettingsConfigured =>
+            !string.IsNullOrWhiteSpace(_options.SettingsUrl) || !string.IsNullOrWhiteSpace(_options.SettingsJson) || _options.Settings != null;
+
+        private void StartSettingsRefreshIfDue(CancellationToken ct)
+        {
+            if (!SettingsConfigured || DateTime.UtcNow < _nextSettingsReadUtc) return;
+            if (_settingsTask != null && !_settingsTask.IsCompleted) return;
+            _nextSettingsReadUtc = DateTime.UtcNow.AddMinutes(Math.Max(1, _options.SettingsRefreshMinutes));
+            _settingsTask = Task.Run(() => RefreshSettingsAsync(ct), ct);
+        }
+
+        // Ayarları okur, bağımlılıkları bulur, düşük güvenlileri eler ve (açıksa) türleri doğrular. Okuma başarısızsa önceki
+        // sonuç korunur: geçici bir hata Monitor'deki tanımları silmez.
+        private async Task RefreshSettingsAsync(CancellationToken ct)
+        {
+            var previous = Volatile.Read(ref _settings);
+            try
+            {
+                var json = await LoadSettingsJsonAsync(ct).ConfigureAwait(false);
+                var endpoints = SettingsDiscovery.Discover(json);
+                var timeoutMs = Math.Max(1000, _options.TimeoutMs > 0 ? _options.TimeoutMs : 3000);
+
+                // Düşük güvenli adaylar: ad bir IP'ye çözülmüyorsa sunucu değildir (ör. düz metin). Yüksek güvenliler asla elenmez;
+                // "veritabanına erişilemiyor" zaten izlenmesi gereken durumdur.
+                var kept = new List<DiscoveredEndpoint>();
+                foreach (var e in endpoints)
+                    if (e.Confidence == "high" || await EndpointVerifier.ResolvesAsync(e.Host, timeoutMs, ct).ConfigureAwait(false)) kept.Add(e);
+
+                if (_verifySettings) kept = await VerifyAsync(kept, timeoutMs, ct).ConfigureAwait(false);
+
+                var result = new DiscoveredSettings
+                {
+                    Signature = SettingsDiscovery.Signature(kept), ReadAtUtc = DateTime.UtcNow, Endpoints = kept, Verified = _verifySettings
+                };
+                if (previous?.Signature != result.Signature)
+                    Say("Settings: " + kept.Count + " dependenc" + (kept.Count == 1 ? "y" : "ies") + " found"
+                        + (kept.Count > 0 ? " (" + string.Join(", ", kept.GroupBy(e => e.Kind).Select(g => g.Count() + " " + g.Key)) + ")" : "") + ".");
+                Volatile.Write(ref _settings, result);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                // Adres içinde gizli kimlikler olabileceği için mesajda adres yazılmaz.
+                var error = Describe(ex);
+                if (previous?.Error != error) Say("Settings could not be read: " + error);
+                Volatile.Write(ref _settings, new DiscoveredSettings
+                {
+                    Signature = previous?.Signature, ReadAtUtc = previous?.ReadAtUtc ?? DateTime.UtcNow,
+                    Endpoints = previous?.Endpoints ?? new List<DiscoveredEndpoint>(), Verified = previous?.Verified ?? false, Error = error
+                });
+                _nextSettingsReadUtc = DateTime.UtcNow.AddMinutes(1);   // hata: bir dakika sonra yeniden dene
+            }
+        }
+
+        private async Task<string> LoadSettingsJsonAsync(CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(_options.SettingsJson)) return _options.SettingsJson!;
+            if (_options.Settings != null) return Json.Serialize(_options.Settings);
+
+            using (var timer = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, _options.SettingsUrl!.Trim()))
+            {
+                timer.CancelAfter(TimeSpan.FromSeconds(15));
+                request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                using (var response = await _http.SendAsync(request, timer.Token).ConfigureAwait(false))
+                {
+                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException("settings returned HTTP " + (int)response.StatusCode);
+                    return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                }
+            }
+        }
+
+        // 3. katman: her adrese bağlanıp türünü sunucunun cevabından anlar. Tür doğrulanırsa (veya düzelirse) güven "high" olur;
+        // düşük güvenli bir aday hiç bağlanılamıyorsa elenir. Sonuçlar 6 saat (bağlanılamayanlar 30 dk) saklanır.
+        private async Task<List<DiscoveredEndpoint>> VerifyAsync(List<DiscoveredEndpoint> endpoints, int timeoutMs, CancellationToken ct)
+        {
+            var results = new VerifiedEndpoint[endpoints.Count];
+            using (var gate = new SemaphoreSlim(Math.Max(1, _options.MaxParallelTests)))
+            {
+                await Task.WhenAll(endpoints.Select(async (e, i) =>
+                {
+                    var cacheKey = e.Host + ":" + e.Port + ":" + (e.Tls ? "tls" : "") + ":" + e.Kind;
+                    lock (_verified)
+                    {
+                        if (_verified.TryGetValue(cacheKey, out var cached)
+                            && DateTime.UtcNow - cached.AtUtc < (cached.Kind != null ? TimeSpan.FromHours(6) : TimeSpan.FromMinutes(30)))
+                        {
+                            results[i] = cached;
+                            return;
+                        }
+                    }
+                    await gate.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        var expected = e.Kind == "tcp" ? null : e.Kind;
+                        var r = await EndpointVerifier.IdentifyAsync(e.Host, e.Port, e.Tls, expected, timeoutMs, ct).ConfigureAwait(false);
+                        // Beklenen türle doğrulanamadıysa ve güven düşükse türü bilinmeyen olarak bir kez daha (tüm protokoller) deneriz.
+                        if (r.Open && r.Kind == null && expected != null && e.Confidence == "low")
+                            r = await EndpointVerifier.IdentifyAsync(e.Host, e.Port, e.Tls, null, timeoutMs, ct).ConfigureAwait(false);
+                        var v = new VerifiedEndpoint { Open = r.Open, Kind = r.Kind, AtUtc = DateTime.UtcNow };
+                        lock (_verified) _verified[cacheKey] = v;
+                        results[i] = v;
+                    }
+                    finally { gate.Release(); }
+                })).ConfigureAwait(false);
+            }
+
+            var kept = new List<DiscoveredEndpoint>();
+            for (int i = 0; i < endpoints.Count; i++)
+            {
+                var e = endpoints[i];
+                var v = results[i];
+                if (v.Kind != null)
+                {
+                    e.Verified = v.Kind;
+                    // HTTP cevabı yalnızca "http" diyorsa daha özel tahmini (ör. alan adından "kibana") ezmiyoruz.
+                    if (!(v.Kind == "http" && e.Kind != "tcp")) e.Kind = v.Kind;
+                    e.Confidence = "high";
+                }
+                else if (!v.Open && e.Confidence == "low")
+                {
+                    continue;   // düşük güvenli ve hiç bağlanılamıyor: sunucu değil
+                }
+                kept.Add(e);
+            }
+            return kept;
+        }
+
         // ------------------------------------------------------------------ Monitor ile iletişim
 
         private readonly ResourceSampler _resources = new ResourceSampler();
@@ -340,7 +497,8 @@ namespace ConnectivityProbe
                 Pod = identity,
                 PollSeconds = Math.Max(1, _options.PollSeconds),
                 Run = run,
-                Resources = _resources.Sample()
+                Resources = _resources.Sample(),
+                Settings = Volatile.Read(ref _settings)
             };
 
             using (var request = NewRequest(ReportPath, Json.Serialize(report)))
@@ -416,6 +574,8 @@ namespace ConnectivityProbe
             /// <summary>Monitor'de "Şimdi test et"e her basıldığında değişir; değiştiyse pod beklemeden test eder.</summary>
             public string RunRequestId { get; set; } = "";
             public int TimeoutMs { get; set; } = 5000;
+            /// <summary>Ayarlarda bulunan adreslerin türü sunucuya bağlanıp doğrulansın mı (Monitor'de uygulama bazında).</summary>
+            public bool VerifySettings { get; set; }
             public List<AssignedConnection> Connections { get; set; } = new List<AssignedConnection>();
 
             public static Assignment Parse(string json)
@@ -425,6 +585,7 @@ namespace ConnectivityProbe
                 {
                     AppId = Json.GetString(o, "appId"),
                     RunRequestId = Json.GetString(o, "runRequestId") ?? "",
+                    VerifySettings = Json.GetBool(o, "verifySettings"),
                     Connections = Json.GetObjectList(o, "connections").Select(c => new AssignedConnection
                     {
                         Id = Json.GetString(c, "id") ?? "",

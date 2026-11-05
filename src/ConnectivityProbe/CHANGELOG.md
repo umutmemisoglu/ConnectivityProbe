@@ -1,5 +1,52 @@
 # Changelog / Değişiklik geçmişi
 
+## 2.2.0
+
+### English
+
+**Dependencies from the application's settings.**
+
+- New options `SettingsUrl` (GET, returns JSON), `SettingsJson` and `Settings` (an object the application already loaded)
+  and `SettingsRefreshMinutes` (10). The pod finds the databases, queues and services in the settings and reports them
+  with every report (`AgentReport.Settings`): **only the setting's name, type, host, port and TLS**; passwords, user names,
+  keys and the settings address never leave the pod.
+- Recognized formats: PostgreSQL / SQL Server / MySQL / Oracle connection strings, StackExchange.Redis strings, URLs
+  (http(s), mongodb, redis(s), amqp(s), postgres(ql), mysql, kafka, ldap(s), smtp(s), nats...), `host:port` lists and
+  host + port fields. The type comes from the scheme, the connection string, the port, the setting's name and the server
+  name. Unambiguous results are "high" confidence; values that only look like an address are "low" (suggestions).
+  `SettingsDiscovery.Discover(json)` is public.
+- Optional verification (switched on per application in the Monitor): the pod connects to each address and sends that
+  protocol's harmless greeting (AMQP, Kafka ApiVersions, MongoDB hello, Redis PING, PostgreSQL SSLRequest, SQL Server
+  PRELOGIN, HTTP GET → Kibana / Elasticsearch / RabbitMQ management / Consul; banners for MySQL, SMTP, SSH, FTP) and takes
+  the type from the answer (`EndpointVerifier`). No credentials are sent. Results are cached (6 h, failures 30 min).
+- A failed settings read keeps the previous result and reports the error. Reading runs in the background and never delays
+  the reports. Still no dependencies (netstandard2.0 + net462).
+- Monitor: found dependencies are added to the connection pool (reusing an existing connection to the same address) and
+  attached automatically; changed / removed settings are applied, with a change log, suggestions, ignore / add again, and
+  the newest pod wins during a deploy. Monitor can also store its data in MongoDB.
+
+### Türkçe
+
+**Uygulamanın ayarlarındaki bağımlılıklar.**
+
+- Yeni seçenekler: `SettingsUrl` (GET, JSON döner), `SettingsJson`, `Settings` (uygulamanın zaten okuduğu nesne) ve
+  `SettingsRefreshMinutes` (10). Pod ayarlardaki veritabanlarını, kuyrukları ve servisleri bulur ve her bildirimde gönderir
+  (`AgentReport.Settings`): **yalnızca ayarın adı, tür, host, port ve TLS**; şifre, kullanıcı adı, anahtar ve ayar adresi
+  pod'dan hiç çıkmaz.
+- Tanınan biçimler: PostgreSQL / SQL Server / MySQL / Oracle bağlantı metinleri, StackExchange.Redis metinleri, adresler
+  (http(s), mongodb, redis(s), amqp(s), postgres(ql), mysql, kafka, ldap(s), smtp(s), nats...), `host:port` listeleri ve
+  host + port alanları. Tür; şemadan, bağlantı metninden, porttan, ayarın adından ve sunucu adından anlaşılır. Kesin
+  sonuçlar "high", yalnızca adrese benzeyenler "low" (öneri) güvenlidir. `SettingsDiscovery.Discover(json)` herkese açıktır.
+- İsteğe bağlı doğrulama (Monitor'de uygulama bazında açılır): pod her adrese bağlanıp o protokolün zararsız karşılamasını
+  gönderir (AMQP, Kafka ApiVersions, MongoDB hello, Redis PING, PostgreSQL SSLRequest, SQL Server PRELOGIN, HTTP GET →
+  Kibana / Elasticsearch / RabbitMQ yönetim / Consul; MySQL, SMTP, SSH, FTP karşılamaları) ve türü cevaptan alır
+  (`EndpointVerifier`). Kimlik bilgisi gönderilmez. Sonuçlar saklanır (6 saat, başarısızlar 30 dk).
+- Ayarlar okunamazsa önceki sonuç korunur ve hata bildirilir. Okuma arka planda yapılır, bildirimleri geciktirmez. Hâlâ
+  bağımlılık yok (netstandard2.0 + net462).
+- Monitor: bulunan bağımlılıklar bağlantı havuzuna eklenir (aynı adrese giden mevcut bağlantı kullanılır) ve uygulamaya
+  kendiliğinden atanır; değişen / kaldırılan ayarlar uygulanır; değişiklik geçmişi, öneriler, yok say / tekrar ekle; deploy
+  sırasında en yeni pod geçerlidir. Monitor verilerini MongoDB'de de tutabilir.
+
 ## 2.1.0
 
 ### English

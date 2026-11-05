@@ -16,7 +16,14 @@ var builder = WebApplication.CreateBuilder(args);
 ConnectivityProbeAgent.Start(
     monitorUrl: builder.Configuration["ConnectivityProbe:MonitorUrl"] ?? "",
     appKey: builder.Configuration["ConnectivityProbe:AppKey"] ?? "",
-    appName: "ConnectivityProbe Sample API");
+    appName: "ConnectivityProbe Sample API",
+    configure: o =>
+    {
+        // İsteğe bağlı: uygulamanın ayarlarını veren adres. Ayarlardaki veritabanları, kuyruklar ve servis adresleri Monitor'de
+        // kendiliğinden tanımlanır (yalnızca tür, sunucu ve port gider; şifreler gitmez).
+        o.SettingsUrl = builder.Configuration["ConnectivityProbe:SettingsUrl"];
+        if (int.TryParse(builder.Configuration["ConnectivityProbe:SettingsRefreshMinutes"], out var minutes)) o.SettingsRefreshMinutes = minutes;
+    });
 
 var app = builder.Build();
 app.MapGet("/", () => "ConnectivityProbe.SampleApi");
