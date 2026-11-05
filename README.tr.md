@@ -429,6 +429,7 @@ doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır)
 | `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Uyarı eşikleri (bkz. [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)). |
 | `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
+| `Mongo:ConnectionString` / `Mongo:Database` | boş / `connectivity_monitor` | Dosyalar yerine MongoDB (yalnızca Monitor; NuGet kütüphanesi etkilenmez). Koleksiyonlar: units, teams, apps, connections, clusters, people, pods, documents, dataProtectionKeys. İlk açılışta dosyalardaki veriler aktarılır. Açılışta Mongo'ya erişilemezse Monitor açılmaz. Bağlantı adresi şifre içerir: secret olarak verin (`Monitor__Mongo__ConnectionString`). |
 | `PublicUrl` | boş | Kullanıcıların açtığı adres (ör. `https://monitor.sirket.com`). TLS önde sonlanıp `https` bilgisi iletilmiyorsa verin; Microsoft girişi ve Teams bağlantıları bunu kullanır. Ayarlar ekranından da girilebilir. |
 
 **Docker / Kubernetes**
@@ -442,8 +443,9 @@ docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
 
 - **8080** portunu (http) dinler. TLS'i sonlandıran bir ingress / proxy arkasında yayınlayın; `X-Forwarded-Proto` ve
   `X-Forwarded-Host` dikkate alınır (Microsoft girişi için gerekli).
-- **`/app/data` kalıcı olmalı** (volume; Kubernetes'te PersistentVolumeClaim): tanımlar, pod durumu, ayarlar ve oturum
-  anahtarları buradadır. **Tek replika** çalıştırın: veri ortak bir veritabanı değil, dosyadır.
+- **Veriler:** ya MongoDB verin (`Monitor__Mongo__ConnectionString`, secret olarak; o zaman volume gerekmez) ya da
+  `/app/data`'yı kalıcı yapın (volume; Kubernetes'te PersistentVolumeClaim): tanımlar, pod durumu, ayarlar ve oturum
+  anahtarları buradadır. İki durumda da **tek replika** çalıştırın: anlık durum bellekte tutulur.
 - Arayüz girişsiz açılır. Giriş istenirse `Monitor__AdminPassword` verin (secret olarak).
 - `GET /healthz` girişsiz `ok` döner (liveness / readiness kontrolleri için).
 - Container root olmayan `app` kullanıcısıyla çalışır.

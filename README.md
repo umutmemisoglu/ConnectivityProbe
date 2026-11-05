@@ -435,6 +435,7 @@ open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor
 | `MissingAfterCycles` | 3 | Test intervals without a report before a pod is "missing". |
 | `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Alert thresholds (see [Resources, TLS and latency](#resources-tls-and-latency-21)). |
 | `DataFile` | `data/definitions.json` | Definitions. Pod state (`pod-state.json`) and login keys (`keys/`) are kept next to it. |
+| `Mongo:ConnectionString` / `Mongo:Database` | empty / `connectivity_monitor` | MongoDB instead of files (only the Monitor; the NuGet library is unaffected). Collections: units, teams, apps, connections, clusters, people, pods, documents, dataProtectionKeys. On the first start, the data in the files is imported. If Mongo cannot be reached at startup, the Monitor does not start. The connection string contains a password: give it as a secret (`Monitor__Mongo__ConnectionString`). |
 | `PublicUrl` | empty | The address people open (e.g. `https://monitor.company.com`). Set it when TLS is terminated in front and `https` is not passed on; Microsoft sign-in and Teams links use it. Also editable under Settings. |
 
 **Docker / Kubernetes**
@@ -448,8 +449,9 @@ docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
 
 - Listens on **8080** (http). Publish it behind an ingress / proxy that terminates TLS; `X-Forwarded-Proto` and
   `X-Forwarded-Host` are honored (needed for Microsoft sign-in).
-- **`/app/data` must be persistent** (a volume, in Kubernetes a PersistentVolumeClaim): definitions, pod state, settings and
-  login keys live there. Run a **single replica**: the data is a file, not a shared database.
+- **Data:** either give MongoDB (`Monitor__Mongo__ConnectionString`, as a secret; then no volume is needed), or make
+  `/app/data` persistent (a volume, in Kubernetes a PersistentVolumeClaim): definitions, pod state, settings and login keys
+  live there. Run a **single replica** in both cases: the live state is kept in memory.
 - The UI opens without a login. To require one, set `Monitor__AdminPassword` (as a secret).
 - `GET /healthz` returns `ok` without a login, for liveness / readiness probes.
 - The container runs as the non-root `app` user.
