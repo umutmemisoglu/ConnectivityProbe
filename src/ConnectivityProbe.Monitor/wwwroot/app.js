@@ -296,7 +296,7 @@ function poolChip(c, q) {
     <span class="grip">⋮⋮</span>
     <i class="health ${health.cls}" title="${esc(health.all ? t('pool.status', { ok: health.ok, all: health.all }) : t('pool.noStatus'))}"></i>
     <span class="grow conn-info">
-      <span class="name">${hl(c.name)}${targetBadge(c)}${c.tls ? ' <span class="tls-tag" title="TLS">🔒</span>' : ''}</span>
+      <span class="name">${hl(c.name)}${targetBadge(c)}${originBadge(c)}${c.tls ? ' <span class="tls-tag" title="TLS">🔒</span>' : ''}</span>
       <span class="conn-target"><span class="host">${hl(c.host)}</span>${c.port ? `<span class="port">${hl(String(c.port))}</span>` : ''}
         <span class="usage ${users.length ? '' : 'unused'}" title="${esc(users.length ? t('pool.usedByTip', { names: users.map((a) => a.name).join(', ') }) : t('pool.unusedTip'))}">${esc(users.length ? t('pool.usedBy', { n: users.length }) : t('pool.unused'))}</span></span>
     </span>
@@ -391,7 +391,7 @@ function renderApps() {
           </div>
           <div class="dropzone">
             ${attached.length ? attached.map((c) => { const st = connState(c.id); return `
-              <span class="chip hover-actions"><i class="health ${st.cls}" title="${esc(st.tip)}"></i><span class="name">${esc(c.name)}${targetBadge(c)}</span>
+              <span class="chip hover-actions"><i class="health ${st.cls}" title="${esc(st.tip)}"></i><span class="name">${esc(c.name)}${targetBadge(c)}${originBadge(c)}</span>
                 <span class="target">${esc(targetOf(c))}</span>
                 <button class="icon-btn act" data-detach="${a.id}|${c.id}" title="${esc(t('apps.detach'))}">✕</button></span>`; }).join('')
               : `<span class="placeholder">${esc(t('apps.dropHere'))}</span>`}
@@ -399,6 +399,7 @@ function renderApps() {
               ${free.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>` : ''}
           </div>
           ${notifySection(a)}
+          ${discoverySection(a)}
         </div>`;
     }).join('') : `<div class="empty">${esc(team ? t('apps.emptyTeam') : t('apps.selectTeam'))}</div>`}</div>`;
   $('#appsPanel').scrollTop = keep;
@@ -452,6 +453,72 @@ function notifySection(a) {
         </fieldset>`).join('')}</div>
       <span class="notify-saved" hidden>${esc(t('nt.saved'))}</span>
     </details>`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ayarlardan bulunan bağımlılıklar (pod SettingsUrl / SettingsJson / Settings verdiyse)
+//   - Kesin bulunanlar havuza eklenip uygulamaya atanır; belirsizler öneri olarak bekler.
+//   - "Sunucu türünü doğrula" açıksa pod'lar adreslere bağlanıp türü sunucunun cevabından anlar (protokol imzası).
+// ---------------------------------------------------------------------------------------------
+const discoveryOpen = new Set();   // açık bölümler (ekran güncellendiğinde açık kalsın)
+
+const KIND_LABELS = {
+  postgresql: 'PostgreSQL', sqlserver: 'SQL Server', mysql: 'MySQL', oracle: 'Oracle', mongodb: 'MongoDB', redis: 'Redis',
+  rabbitmq: 'RabbitMQ', kafka: 'Kafka', elasticsearch: 'Elasticsearch', kibana: 'Kibana', smtp: 'SMTP', ldap: 'LDAP', nats: 'NATS',
+  memcached: 'Memcached', zookeeper: 'ZooKeeper', consul: 'Consul', ssh: 'SSH', ftp: 'FTP', http: 'HTTP', tcp: 'TCP',
+};
+const kindLabel = (k) => KIND_LABELS[k] || String(k || '').toUpperCase();
+// Ayar yolunun son iki parçası (tamamı ipucunda): AppSettings:ConnectionStrings:DefaultConnection -> ConnectionStrings:DefaultConnection
+const shortKey = (key) => String(key || '').split(':').slice(-2).join(':');
+const originBadge = (c) => (c.origin === 'settings' ? ` <span class="origin" title="${esc(t('disc.fromSettings'))}">⚙</span>` : '');
+
+function discoveryRow(appId, l, actions) {
+  return `<tr>
+    <td><code title="${esc(l.key)}">${esc(shortKey(l.key))}</code></td>
+    <td><span class="kind">${esc(kindLabel(l.kind))}</span>${l.verified ? ` <span class="ok-mark" title="${esc(t('disc.verifiedT', { k: kindLabel(l.verified) }))}">✓</span>` : ''}</td>
+    <td class="ep">${esc(l.host)}:${l.port}${l.tls ? ' <span class="tls-tag" title="TLS">🔒</span>' : ''}</td>
+    <td class="acts">${actions.map(([action, label]) => `<button class="btn small" data-disc-action="${action}" data-disc-app="${appId}" data-disc-key="${esc(l.key)}">${esc(t(label))}</button>`).join(' ')}</td>
+  </tr>`;
+}
+
+function discoverySection(a) {
+  const st = a.discovery;
+  const links = st?.links || [];
+  const suggestions = st?.suggestions || [];
+  const ignored = st?.ignoredKeys || [];
+  const changes = (st?.changes || []).slice(-10).reverse();
+  const summary = !st ? t('disc.none')
+    : t('disc.summary', { n: links.length }) + (suggestions.length ? ' · ' + t('disc.suggN', { n: suggestions.length }) : '');
+  return `
+    <details class="notify discovery" data-disc-open="${a.id}" ${discoveryOpen.has(a.id) ? 'open' : ''}>
+      <summary>${esc(t('disc.title'))} <span class="muted">· ${esc(summary)}</span>${st?.error ? ` <span class="warn-mark" title="${esc(st.error)}">⚠</span>` : ''}</summary>
+      ${!st ? `<p class="hint">${esc(t('disc.howTo'))}</p>`
+        : `<p class="hint">${esc(t('disc.read', { t: dateTimeOf(st.readAtUtc) }))}${st.updatedAtUtc ? ' · ' + esc(t('disc.updated', { t: dateTimeOf(st.updatedAtUtc) })) : ''}</p>
+           ${st.error ? `<p class="error">${esc(t('disc.error', { e: st.error }))}</p>` : ''}`}
+      <label class="notify-rule"><input type="checkbox" data-disc-verify="${a.id}" ${a.verifySettings ? 'checked' : ''}>
+        <span><b>${esc(t('disc.verify'))}</b><span class="desc">${esc(t('disc.verifyD'))}</span></span></label>
+      ${links.length ? `<table class="disc">${links.map((l) => discoveryRow(a.id, l, [['ignore', 'disc.remove']])).join('')}</table>` : ''}
+      ${suggestions.length ? `<h4 class="disc-h">${esc(t('disc.suggestions'))}</h4><p class="hint">${esc(t('disc.suggHint'))}</p>
+        <table class="disc">${suggestions.map((l) => discoveryRow(a.id, l, [['accept', 'disc.accept'], ['ignore', 'disc.ignore']])).join('')}</table>` : ''}
+      ${ignored.length ? `<h4 class="disc-h">${esc(t('disc.ignored'))}</h4>
+        <table class="disc">${ignored.map((key) => `<tr><td><code title="${esc(key)}">${esc(shortKey(key))}</code></td><td></td><td></td>
+          <td class="acts"><button class="btn small" data-disc-action="restore" data-disc-app="${a.id}" data-disc-key="${esc(key)}">${esc(t('disc.restore'))}</button></td></tr>`).join('')}</table>` : ''}
+      ${changes.length ? `<h4 class="disc-h">${esc(t('disc.changes'))}</h4><ul class="disc-log">${changes.map((c) => `
+        <li><span class="muted">${esc(dateTimeOf(c.atUtc))}</span> <b class="ch-${esc(c.type)}">${esc(t('disc.ch.' + c.type))}</b>
+          <code title="${esc(c.key)}">${esc(shortKey(c.key))}</code> ${c.from ? esc(c.from) : ''}${c.from && c.to ? ' → ' : ''}${c.to ? esc(c.to) : ''}</li>`).join('')}</ul>` : ''}
+    </details>`;
+}
+
+async function discoveryAction(appId, action, key) {
+  try { await api('POST', `/api/apps/${appId}/discovery/${action}`, { key }); }
+  catch (err) { alert(err.message); }
+  await loadDefs();
+}
+
+async function setDiscoveryVerify(appId, verify) {
+  try { await api('PUT', `/api/apps/${appId}/discovery`, { verify }); }
+  catch (err) { alert(err.message); }
+  await loadDefs();
 }
 
 // Kuralları kaydeder (checkbox değişince hemen).
@@ -774,6 +841,7 @@ $('#tab-defs').addEventListener('click', async (e) => {
   const el = e.target.closest('button, [data-select-team]');
   if (!el) return;
   const d = el.dataset;
+  if (d.discAction) { discoveryAction(d.discApp, d.discAction, d.discKey); return; }
 
   try {
     // Birimler
@@ -1602,10 +1670,12 @@ $('#logout').addEventListener('click', async () => {
 // Bildirim bölümünün açık/kapalı durumu ve kural değişiklikleri.
 document.addEventListener('toggle', (e) => {
   const d = e.target;
-  if (d.classList?.contains('notify')) { if (d.open) notifyOpen.add(d.dataset.notifyApp); else notifyOpen.delete(d.dataset.notifyApp); }
+  if (d.classList?.contains('discovery')) { if (d.open) discoveryOpen.add(d.dataset.discOpen); else discoveryOpen.delete(d.dataset.discOpen); }
+  else if (d.classList?.contains('notify')) { if (d.open) notifyOpen.add(d.dataset.notifyApp); else notifyOpen.delete(d.dataset.notifyApp); }
 }, true);
 $('#tab-defs').addEventListener('change', (e) => {
   if (e.target.matches('[data-notify-rule]')) saveNotifyRules(e.target.closest('.notify'));
+  else if (e.target.matches('[data-disc-verify]')) setDiscoveryVerify(e.target.dataset.discVerify, e.target.checked);
 });
 $('#meBtn').addEventListener('click', () => {
   if (me && confirm(t('nt.msSignedIn', { name: me.name }))) location.href = '/auth/microsoft/signout';

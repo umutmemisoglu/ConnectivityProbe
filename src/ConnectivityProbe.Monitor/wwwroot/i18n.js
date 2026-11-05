@@ -47,6 +47,19 @@ const I18N = {
 
     // tanımlar: arama, kullanım, durum, sürükleme
     // Bildirimler (Teams)
+    'disc.title': '⚙ Ayarlardan bulunanlar', 'disc.none': 'ayar adresi verilmedi',
+    'disc.summary': '{n} bağımlılık', 'disc.suggN': '{n} öneri',
+    'disc.howTo': 'Uygulama ConnectivityProbe\'u başlatırken ayar adresini (SettingsUrl) ya da ayarların kendisini (SettingsJson / Settings) verirse; veritabanları, kuyruklar ve servis adresleri buradan kendiliğinden tanımlanır ve değişiklikler takip edilir. Ayarlar yalnızca pod\'da okunur: buraya yalnızca tür, sunucu ve port gelir; şifreler gelmez.',
+    'disc.read': 'Ayarlar en son {t} okundu', 'disc.updated': 'son değişiklik {t}',
+    'disc.error': 'Ayarlar son okumada okunamadı ({e}); önceki sonuç geçerli.',
+    'disc.verify': 'Sunucu türünü doğrula',
+    'disc.verifyD': 'Pod\'lar her adrese bağlanıp o protokolün zararsız "merhaba"sını gönderir ve türü sunucunun cevabından anlar (ör. RabbitMQ, Kafka, Kibana). Kimlik bilgisi gönderilmez, veri okunmaz. Belirsiz adresler doğrulanınca kendiliğinden eklenir; hiç bağlanılamayan belirsiz adresler elenir.',
+    'disc.verifiedT': 'Sunucunun cevabıyla doğrulandı: {k}',
+    'disc.remove': 'Kaldır', 'disc.accept': 'Ekle', 'disc.ignore': 'Yok say', 'disc.restore': 'Tekrar ekle',
+    'disc.suggestions': 'Öneriler', 'disc.suggHint': 'Bu değerler bir sunucu adresine benziyor ama kesin değil. Eklersen bağlantı havuzuna eklenip uygulamaya atanır.',
+    'disc.ignored': 'Yok sayılanlar (kendiliğinden eklenmez)', 'disc.changes': 'Değişiklikler',
+    'disc.ch.added': 'eklendi', 'disc.ch.changed': 'değişti', 'disc.ch.removed': 'kaldırıldı', 'disc.ch.ignored': 'yok sayıldı',
+    'disc.fromSettings': 'Uygulamanın ayarlarından kendiliğinden eklendi',
     'nt.title': '🔔 Bildirimler', 'nt.subscribers': 'Bildirim alanlar', 'nt.nobody': 'Henüz kimse bildirim almıyor.',
     'nt.subscribe': '🔔 Bana haber ver', 'nt.unsubscribe': '🔕 Bildirimi kapat',
     'nt.subscribeTitle': 'Bu uygulamanın aşağıda seçili durumları için Teams\'ten bildirim al',
@@ -244,6 +257,19 @@ const I18N = {
     
     
 
+    'disc.title': '⚙ Found in settings', 'disc.none': 'no settings address given',
+    'disc.summary': '{n} dependencies', 'disc.suggN': '{n} suggestions',
+    'disc.howTo': 'If the application gives its settings address (SettingsUrl) or the settings themselves (SettingsJson / Settings) when starting ConnectivityProbe, databases, queues and service addresses are defined here automatically and changes are tracked. Settings are read only in the pod: only type, server and port come here; passwords never do.',
+    'disc.read': 'Settings last read {t}', 'disc.updated': 'last change {t}',
+    'disc.error': 'Settings could not be read last time ({e}); the previous result stays.',
+    'disc.verify': 'Verify server types',
+    'disc.verifyD': 'Pods connect to each address, send that protocol\'s harmless "hello" and recognize the type from the server\'s answer (e.g. RabbitMQ, Kafka, Kibana). No credentials are sent, no data is read. Uncertain addresses are added once verified; uncertain addresses that cannot be reached at all are dropped.',
+    'disc.verifiedT': 'Verified by the server\'s answer: {k}',
+    'disc.remove': 'Remove', 'disc.accept': 'Add', 'disc.ignore': 'Ignore', 'disc.restore': 'Add again',
+    'disc.suggestions': 'Suggestions', 'disc.suggHint': 'These values look like server addresses but are not certain. If you add one, it is added to the pool and attached to the application.',
+    'disc.ignored': 'Ignored (not added automatically)', 'disc.changes': 'Changes',
+    'disc.ch.added': 'added', 'disc.ch.changed': 'changed', 'disc.ch.removed': 'removed', 'disc.ch.ignored': 'ignored',
+    'disc.fromSettings': 'Added automatically from the application\'s settings',
     'nt.title': '🔔 Notifications', 'nt.subscribers': 'Notified people', 'nt.nobody': 'Nobody gets notifications yet.',
     'nt.subscribe': '🔔 Notify me', 'nt.unsubscribe': '🔕 Stop notifications',
     'nt.subscribeTitle': 'Get Teams notifications for the situations selected below',

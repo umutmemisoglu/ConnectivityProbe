@@ -48,13 +48,18 @@ internal sealed class Harness : IDisposable
         });
 
     /// <summary>Pod bildirimi gönderir (test sonuçları ve kaynak ölçümleriyle birlikte olabilir).</summary>
-    public AgentAssignment Report(AppDefinition app, Pod pod, ResourceSample? resources = null, params AgentResult[] results)
+    public AgentAssignment Report(AppDefinition app, Pod pod, ResourceSample? resources = null, params AgentResult[] results) =>
+        Report(app, pod, null, resources, results);
+
+    /// <summary>Ayarlardan bulunanlarla birlikte pod bildirimi.</summary>
+    public AgentAssignment Report(AppDefinition app, Pod pod, DiscoveredSettings? settings, ResourceSample? resources = null, params AgentResult[] results)
     {
         var report = new AgentReport
         {
             AppName = app.Name,
             PollSeconds = 10,
             Resources = resources,
+            Settings = settings,
             Pod = new PodIdentity
             {
                 InstanceId = pod.Id, MachineName = pod.Id, StartedAtUtc = pod.StartedAtUtc ?? new DateTime(2026, 10, 7, 8, 0, 0, DateTimeKind.Utc),

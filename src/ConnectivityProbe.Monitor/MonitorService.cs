@@ -183,9 +183,33 @@ public sealed class MonitorService : BackgroundService
             Trigger();
         }
 
+        // step 3: Ayarlardan bulunan bağımlılıklar tanımlara uygulanır.
+        if (report.Settings is { } settings) ApplySettings(app, rt, pod, settings, now);
+
         return new AgentAssignment(
             app.Id, app.Name, (int)TestInterval.TotalSeconds, RunRequestId, Math.Max(500, _opt.ProbeTimeoutMs),
-            connections.Select(c => new AgentConnection(c.Id, c.Name, c.Host, c.Port, c.TlsEnabled())).ToList());
+            connections.Select(c => new AgentConnection(c.Id, c.Name, c.Host, c.Port, c.TlsEnabled())).ToList(),
+            app.VerifySettings);
+    }
+
+    // Yalnızca en son başlayan canlı pod'un sonucu uygulanır: deploy sırasında eski pod'ların eski ayarları tanımları geri
+    // almasın. Sonuç değişmediyse (aynı imza, aynı hata durumu) tanımlara dokunulmaz.
+    private void ApplySettings(AppDefinition app, AppRuntime rt, PodIdentity pod, DiscoveredSettings settings, DateTime now)
+    {
+        if (settings.Signature == null && settings.Error == null) return;
+        lock (rt)
+        {
+            var newest = rt.Known.Values.Where(p => now - p.LastSeenUtc < TimeSpan.FromMinutes(2)).Max(p => p.StartedAtUtc);
+            if (newest is { } n && pod.StartedAtUtc < n - TimeSpan.FromSeconds(2)) return;
+        }
+        if (app.Discovery is { } st && st.Signature == settings.Signature && st.Error == settings.Error) return;
+
+        var changes = _store.Mutate(d => d.Apps.FirstOrDefault(a => a.Id == app.Id) is { } a ? SettingsSync.Apply(d, a, settings, now) : 0);
+        if (changes > 0)
+        {
+            _log.LogInformation("Settings of app {App}: {Changes} dependency change(s) applied", app.Name, changes);
+            Trigger();
+        }
     }
 
     /// <summary>Pod düzgün kapanıyor: alarm vermeden listeden çıkarılır (deploy, scale-down).</summary>

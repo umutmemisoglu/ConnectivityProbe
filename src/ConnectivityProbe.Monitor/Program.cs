@@ -426,6 +426,8 @@ api.MapDelete("/connections/{id}", (string id, DefinitionStore store) =>
 {
     var removed = store.Mutate(d =>
     {
+        // Ayarlardan gelmişse ilgili ayarlar yok sayılır (bir sonraki bildirimde yeniden oluşturulmasın).
+        foreach (var a in d.Apps) SettingsSync.ConnectionDetached(d, a, id, DateTime.UtcNow);
         foreach (var a in d.Apps) a.ConnectionIds.Remove(id);
         return d.Connections.RemoveAll(c => c.Id == id) > 0;
     });
@@ -497,9 +499,51 @@ api.MapPut("/apps/{appId}/connections/{connId}", (string appId, string connId, D
 });
 
 // Bağlantı ile uygulama arasındaki ilişkiyi kaldırır.
+// Ayarlardan gelmiş bir bağlantı elle çıkarılırsa o ayar "yok sayılan" olur: bir daha kendiliğinden eklenmez.
 api.MapDelete("/apps/{appId}/connections/{connId}", (string appId, string connId, DefinitionStore store) =>
-    store.Mutate(d => d.Apps.FirstOrDefault(a => a.Id == appId)?.ConnectionIds.Remove(connId) ?? false)
-        ? Results.NoContent() : Results.NotFound());
+    store.Mutate(d =>
+    {
+        if (d.Apps.FirstOrDefault(a => a.Id == appId) is not { } a) return false;
+        SettingsSync.ConnectionDetached(d, a, connId, DateTime.UtcNow);
+        a.ConnectionIds.Remove(connId);
+        return true;
+    }) ? Results.NoContent() : Results.NotFound());
+
+// ---------------------------------------------------------------------------------------------
+// Ayarlardan bulunan bağımlılıklar: doğrulama ayarı, öneriyi onaylama, yok sayma, geri alma.
+// ---------------------------------------------------------------------------------------------
+
+// Sunucu türünü doğrulama (protokol imzası): uygulama bazında açılır / kapanır; pod'lar bir sonraki bildirimde öğrenir.
+api.MapPut("/apps/{id}/discovery", (string id, DiscoveryInput input, DefinitionStore store, MonitorService monitor) =>
+{
+    var app = store.Mutate(d =>
+    {
+        var a = d.Apps.FirstOrDefault(x => x.Id == id);
+        if (a != null && input.Verify is { } verify) a.VerifySettings = verify;
+        return a;
+    });
+    if (app == null) return Results.NotFound();
+    monitor.Trigger();
+    return Results.Ok(AppView.From(app));
+});
+
+api.MapPost("/apps/{id}/discovery/{action}", (string id, string action, DiscoveryInput input, DefinitionStore store, MonitorService monitor) =>
+{
+    if (string.IsNullOrWhiteSpace(input.Key)) return Results.BadRequest(new { error = Lang.T("Ayar adı gerekli", "Setting key is required") });
+    if (action is not ("accept" or "ignore" or "restore")) return Results.NotFound();
+    var app = store.Mutate(d =>
+    {
+        var a = d.Apps.FirstOrDefault(x => x.Id == id);
+        if (a == null) return null;
+        if (action == "accept") SettingsSync.Accept(a, input.Key);
+        else if (action == "restore") SettingsSync.Restore(a, input.Key);
+        else SettingsSync.Ignore(d, a, input.Key, DateTime.UtcNow);
+        return a;
+    });
+    if (app == null) return Results.NotFound();
+    monitor.Trigger();
+    return Results.Ok(AppView.From(app));
+});
 
 // ---------------------------------------------------------------------------------------------
 // Bildirimler: uygulama hangi durumlarda bildirim üretir (kişiden bağımsız) ve kimler alır.

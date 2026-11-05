@@ -566,3 +566,20 @@ a.logo { text-decoration: none; }
 .st-chip.ok { background: var(--ok-bg); color: var(--ok); }
 .st-chip.missing { background: var(--warn-bg); color: var(--warn); }
 .st-chip.big { font-size: 13px; padding: 4px 10px; }
+
+/* Ayarlardan bulunanlar */
+.discovery table.disc { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+.discovery table.disc td { padding: 4px 6px; border-top: 1px solid var(--border); vertical-align: middle; }
+.discovery table.disc code { font-size: 11px; word-break: break-all; }
+.discovery table.disc td.ep { color: var(--text-2); white-space: nowrap; }
+.discovery table.disc td.acts { text-align: right; white-space: nowrap; }
+.discovery .kind { font-weight: 600; }
+.discovery .ok-mark { color: var(--ok); font-weight: 700; }
+.discovery .warn-mark { color: var(--warn); }
+.discovery .disc-h { font-size: 12px; margin: 10px 0 2px; }
+.discovery .disc-log { list-style: none; padding: 0; margin: 4px 0; font-size: 12px; }
+.discovery .disc-log li { padding: 2px 0; }
+.discovery .ch-added { color: var(--ok); }
+.discovery .ch-changed { color: var(--warn); }
+.discovery .ch-removed, .discovery .ch-ignored { color: var(--muted); }
+.origin { font-size: 11px; opacity: .8; }

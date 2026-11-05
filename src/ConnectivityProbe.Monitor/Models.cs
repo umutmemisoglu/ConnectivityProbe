@@ -40,6 +40,8 @@ public sealed class ConnectionDefinition
     /// TLS / sertifika kontrolü: "auto" (varsayılan; https:// ve 443, 8443, 636, 993, 995, 465, 5671 portlarında), "on" veya "off".
     /// </summary>
     public string? TlsCheck { get; set; }
+    /// <summary>"settings": uygulamanın ayarlarından kendiliğinden eklendi (kimse kullanmayınca kendiliğinden kaldırılır).</summary>
+    public string? Origin { get; set; }
 
     private static readonly int[] TlsPorts = { 443, 8443, 636, 993, 995, 465, 5671 };
 
@@ -73,6 +75,65 @@ public sealed class AppDefinition
     public List<string>? NotifyRules { get; set; }
     /// <summary>Bu uygulamanın bildirimlerini alan kişiler.</summary>
     public List<string> SubscriberIds { get; set; } = new();
+    /// <summary>Ayarlarda bulunan adreslerin türü pod'lardan sunucuya bağlanıp doğrulansın mı (protokol imzası). Varsayılan: kapalı.</summary>
+    public bool VerifySettings { get; set; }
+    /// <summary>Uygulamanın ayarlarından bulunan bağımlılıklar (pod SettingsUrl / SettingsJson verdiyse).</summary>
+    public SettingsState? Discovery { get; set; }
+}
+
+/// <summary>Bir uygulamanın ayarlarından bulunan bağımlılıklar ve geçmişi.</summary>
+public sealed class SettingsState
+{
+    /// <summary>Son uygulanan sonucun imzası; pod'dan aynısı gelirse bir şey yapılmaz.</summary>
+    public string? Signature { get; set; }
+    /// <summary>Tanımların son değiştiği an.</summary>
+    public DateTime? UpdatedAtUtc { get; set; }
+    /// <summary>Pod'un ayarları son okuduğu an.</summary>
+    public DateTime? ReadAtUtc { get; set; }
+    /// <summary>Pod ayarları son okuyamadıysa nedeni (önceki sonuç geçerli kalır).</summary>
+    public string? Error { get; set; }
+    /// <summary>Türleri sunucuya bağlanarak doğrulanmış sonuç mu.</summary>
+    public bool Verified { get; set; }
+    /// <summary>Kesin bulunanlar: bağlantı havuzuna eklenip uygulamaya atandı.</summary>
+    public List<SettingsLink> Links { get; set; } = new();
+    /// <summary>Yalnızca ipucuyla bulunanlar: kullanıcı onaylarsa eklenir.</summary>
+    public List<SettingsLink> Suggestions { get; set; } = new();
+    /// <summary>Kullanıcının kaldırdığı / yok saydığı ayarlar: bir daha kendiliğinden eklenmez.</summary>
+    public List<string> IgnoredKeys { get; set; } = new();
+    /// <summary>Kullanıcının onayladığı öneriler: kesin bulunmuş gibi işlenir.</summary>
+    public List<string> AcceptedKeys { get; set; } = new();
+    /// <summary>Eklenen / değişen / kaldırılan bağımlılıkların geçmişi (en yeni sonda, en fazla 100).</summary>
+    public List<SettingsChange> Changes { get; set; } = new();
+}
+
+/// <summary>Ayardaki bir bağımlılık ve havuzdaki karşılığı.</summary>
+public sealed class SettingsLink
+{
+    /// <summary>Ayardaki yeri (ör. "AppSettings:ConnectionStrings:DefaultConnection").</summary>
+    public string Key { get; set; } = "";
+    public string Kind { get; set; } = "";
+    public string Host { get; set; } = "";
+    public int Port { get; set; }
+    public bool Tls { get; set; }
+    /// <summary>Doğrulamada sunucunun cevabından anlaşılan tür (doğrulanmadıysa null).</summary>
+    public string? Verified { get; set; }
+    /// <summary>Havuzdaki bağlantı (öneriler için null).</summary>
+    public string? ConnectionId { get; set; }
+    /// <summary>Bağlantı uygulamaya zaten elle atanmıştı: ayar kaldırılsa da uygulamadan çıkarılmaz.</summary>
+    public bool PreAttached { get; set; }
+
+    public string Endpoint => $"{Host}:{Port}";
+}
+
+/// <summary>Ayarlardaki bir değişiklik.</summary>
+public sealed class SettingsChange
+{
+    public DateTime AtUtc { get; set; }
+    /// <summary>added, changed, removed.</summary>
+    public string Type { get; set; } = "";
+    public string Key { get; set; } = "";
+    public string? From { get; set; }
+    public string? To { get; set; }
 }
 
 /// <summary>
@@ -102,10 +163,10 @@ public sealed class DefinitionData
 // ---------------------------------------------------------------------------------------------
 
 public sealed record AppView(string Id, string? TeamId, string Name, string AppKey, DateTime RegisteredAtUtc, List<string> ConnectionIds,
-    List<string> NotifyRules, List<string> SubscriberIds)
+    List<string> NotifyRules, List<string> SubscriberIds, bool VerifySettings, SettingsState? Discovery)
 {
     public static AppView From(AppDefinition a) => new(a.Id, a.TeamId, a.Name, a.AppKey, a.RegisteredAtUtc, a.ConnectionIds.ToList(),
-        a.NotifyRules ?? Monitor.NotifyRules.Defaults(), a.SubscriberIds.ToList());
+        a.NotifyRules ?? Monitor.NotifyRules.Defaults(), a.SubscriberIds.ToList(), a.VerifySettings, a.Discovery);
 }
 
 /// <summary>Kişinin arayüze giden hali (Teams adresi hiçbir zaman gönderilmez).</summary>
@@ -122,16 +183,19 @@ public sealed record RuleView(string Code, string Category, string Kind, string 
 
 public sealed record NotifyInput(List<string>? Rules);
 
+/// <summary>Ayarlardan bulunanlar: doğrulama ayarı ve tek bir ayar üzerinde işlem (onayla / yok say / geri al).</summary>
+public sealed record DiscoveryInput(bool? Verify, string? Key);
+
 /// <summary>Ayarlar → Teams bildirimleri. null = değiştirme; iş akışı adresi yalnızca yeni değer yazılınca değişir.</summary>
 public sealed record NotifySettingsInput(string? TenantId, string? ClientId, string? WorkflowUrl, string? PublicUrl = null);
 
 public sealed record NotifyTestInput(string? Email);
 
 /// <summary>Bağlantı tanımının arayüze giden hali.</summary>
-public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls)
+public sealed record ConnectionView(string Id, string Name, string Host, int? Port, string? TargetAppId, string TlsCheck, bool Tls, string? Origin)
 {
     public static ConnectionView From(ConnectionDefinition c) =>
-        new(c.Id, c.Name, c.Host, c.Port, c.TargetAppId, c.TlsCheck ?? "auto", c.TlsEnabled());
+        new(c.Id, c.Name, c.Host, c.Port, c.TargetAppId, c.TlsCheck ?? "auto", c.TlsEnabled(), c.Origin);
 }
 
 public sealed record DefinitionsView(
@@ -160,8 +224,10 @@ public sealed record LoginInput(string? Username, string? Password);
 
 /// <summary>Pod'un bildirimine yanıt: bu uygulamaya ait bağlantılar ve test ayarları.</summary>
 /// <param name="RunRequestId">"Şimdi test et"e her basıldığında değişir; pod değiştiğini görünce beklemeden test eder.</param>
+/// <param name="VerifySettings">Ayarlardaki adreslerin türü sunucuya bağlanıp doğrulansın mı (uygulama bazında).</param>
 public sealed record AgentAssignment(
-    string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, List<AgentConnection> Connections);
+    string AppId, string AppName, int IntervalSeconds, string RunRequestId, int TimeoutMs, List<AgentConnection> Connections,
+    bool VerifySettings = false);
 
 /// <param name="Tls">TCP'ye ek olarak TLS el sıkışması ve sertifika kontrolü yapılsın mı.</param>
 public sealed record AgentConnection(string Id, string Name, string Host, int? Port, bool Tls);
