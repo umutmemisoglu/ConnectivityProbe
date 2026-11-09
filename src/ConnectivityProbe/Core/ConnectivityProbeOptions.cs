@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace ConnectivityProbe
 {
     /// <summary>
@@ -55,5 +57,37 @@ namespace ConnectivityProbe
 
         /// <summary>Ayarların yeniden okunma aralığı (dk); değişen / eklenen / kaldırılan bağımlılıklar böyle fark edilir. Varsayılan: 10.</summary>
         public int SettingsRefreshMinutes { get; set; } = 10;
+
+        /// <summary>
+        /// ConnectivityProbe health ucu açılsın mı (http://&lt;pod-ip&gt;:&lt;HealthPort&gt;/connectivityprobe/health). Başka
+        /// uygulamaların pod'ları bu servisi test ederken DLL'i kullandığını ve durumunu buradan anlar. Varsayılan: açık.
+        /// </summary>
+        public bool HealthEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Health ucunun portu. Uygulamanın kendi portundan ayrıdır; doluysa sonraki 9 port, o da olmazsa boş bir port kullanılır
+        /// ve Monitor'e bildirilir. Varsayılan: 29470.
+        /// </summary>
+        public int HealthPort { get; set; } = 29470;
+
+        /// <summary>
+        /// Monitor'de bağlantıların gruplanması: adresinde (host / URL) veya adında anahtar kelimelerden biri geçen bağlantılar
+        /// uygulamanın detayında o grubun altında gösterilir. Örnek: <c>o.AddGroup("Ödeme servisleri", "pay", "billing")</c>.
+        /// </summary>
+        public List<ConnectionGroup> Groups { get; set; } = new List<ConnectionGroup>();
+
+        /// <summary>Bağlantı grubu ekler (bkz. <see cref="Groups"/>).</summary>
+        public ConnectivityProbeOptions AddGroup(string name, params string[] keywords)
+        {
+            Groups.Add(new ConnectionGroup { Name = name, Keywords = new List<string>(keywords ?? new string[0]) });
+            return this;
+        }
+    }
+
+    /// <summary>Monitor'de bağlantıların gruplanması: ad ve aranacak anahtar kelimeler (büyük / küçük harf duyarsız).</summary>
+    public sealed class ConnectionGroup
+    {
+        public string Name { get; set; } = "";
+        public List<string> Keywords { get; set; } = new List<string>();
     }
 }

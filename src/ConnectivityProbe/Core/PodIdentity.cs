@@ -55,6 +55,11 @@ namespace ConnectivityProbe
         public string? Namespace { get; set; }
         /// <summary>Seçili ortam değişkenleri (pod adı, node, ortam adı, IIS app pool...). Başka değişken okunmaz.</summary>
         public Dictionary<string, string> Environment { get; set; } = new Dictionary<string, string>();
+        /// <summary>
+        /// ConnectivityProbe health ucunun dinlediği port (http://&lt;pod-ip&gt;:&lt;port&gt;/connectivityprobe/health); kapalıysa null.
+        /// Başka uygulamaların pod'ları bu servisin health'ini bu portla sorgular.
+        /// </summary>
+        public int? HealthPort { get; set; }
     }
 
     /// <summary>Pod kimliğini üretir. Değişmeyen kısımlar bir kez hesaplanır.</summary>

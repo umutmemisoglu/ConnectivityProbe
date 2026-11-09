@@ -26,6 +26,8 @@ namespace ConnectivityProbe
         public ResourceSample? Resources { get; set; }
         /// <summary>Ayarlardan bulunan bağımlılıklar (SettingsUrl / SettingsJson / Settings verildiyse; yalnızca tür, host, port).</summary>
         public DiscoveredSettings? Settings { get; set; }
+        /// <summary>Bağlantı grupları (ör. "Ödeme servisleri": pay, billing); Monitor detayda bağlantıları bunlara göre gruplar.</summary>
+        public List<ConnectionGroup> Groups { get; set; } = new List<ConnectionGroup>();
     }
 
     /// <summary>Bir pod'un bir test turu.</summary>
@@ -46,6 +48,11 @@ namespace ConnectivityProbe
         public TlsReport? Tls { get; set; }
         /// <summary>Test yapılamadıysa nedeni (ör. tanımdaki host geçersiz).</summary>
         public string? Error { get; set; }
+        /// <summary>
+        /// Hedef servisin ConnectivityProbe health ucunun sonucu (Monitor bu bağlantı için istediyse): servis DLL'i kullanıyor mu,
+        /// kullanıyorsa durumu. Hedef birden fazla pod'sa her biri için ayrı.
+        /// </summary>
+        public List<HealthCheckResult>? Health { get; set; }
     }
 
     /// <summary>
@@ -75,6 +82,38 @@ namespace ConnectivityProbe
         private readonly CancellationTokenSource _stop = new CancellationTokenSource();
         private readonly Task _loop;
         private int _stopped;
+        private readonly HealthServer? _health;
+        private volatile int _lastRunTotal = -1;   // -1: henüz test yapılmadı
+        private volatile int _lastRunFailed;
+
+        /// <summary>Health ucunun dinlediği port (kapalıysa null).</summary>
+        public int? HealthPort => _health?.Port;
+
+        // Health ucunun cevabı: ConnectivityProbe imzası, durum ve uygulama bilgisi. Durum: son testte erişilemeyen bağlantı
+        // varsa Degraded, yoksa Healthy. Uygulama anahtarı (kimlik doğrulamada kullanıldığı için) cevaba konmaz.
+        private string HealthJson()
+        {
+            var identity = PodIdentityBuilder.Build(_app, _options.AppName);
+            var body = new Dictionary<string, object?>
+            {
+                ["connectivityProbe"] = ProbeInfo.Version,
+                ["status"] = _lastRunFailed > 0 ? "Degraded" : "Healthy",
+                ["appId"] = AppId,
+                ["appName"] = identity.AppName,
+                ["appVersion"] = identity.AppVersion,
+                ["buildId"] = identity.BuildId,
+                ["instanceId"] = identity.InstanceId,
+                ["machineName"] = identity.MachineName,
+                ["startedAtUtc"] = identity.StartedAtUtc,
+                ["uptimeSeconds"] = (long)(DateTime.UtcNow - identity.StartedAtUtc).TotalSeconds,
+                ["monitor"] = new Dictionary<string, object?> { ["lastContactUtc"] = LastContactUtc, ["error"] = LastError },
+                ["lastRun"] = _lastRunTotal < 0 ? null : new Dictionary<string, object?>
+                {
+                    ["atUtc"] = LastRunUtc, ["connections"] = _lastRunTotal, ["failed"] = _lastRunFailed
+                }
+            };
+            return Json.Serialize(body);
+        }
 
         private ConnectivityProbeAgent(ConnectivityProbeOptions options, Assembly? app)
         {
@@ -86,6 +125,14 @@ namespace ConnectivityProbe
             // Süreç kapanırken (Kubernetes SIGTERM, Ctrl+C, servis durdurma) ve IIS uygulamayı geri dönüştürürken Monitor'e haber ver.
             AppDomain.CurrentDomain.ProcessExit += OnShutdown;
             AppDomain.CurrentDomain.DomainUnload += OnShutdown;
+
+            // ConnectivityProbe health ucu: ayrı portta (uygulamanın kendi uçlarıyla çakışmaz; worker'larda da çalışır).
+            if (options.HealthEnabled)
+            {
+                _health = HealthServer.Start(options.HealthPort > 0 ? options.HealthPort : HealthServer.DefaultPort, HealthJson);
+                if (_health == null) Say("Health endpoint could not be opened.");
+                else if (_health.Port != options.HealthPort) Say("Health port " + options.HealthPort + " is in use; health endpoint on port " + _health.Port + ".");
+            }
 
             _loop = Task.Run(() => LoopAsync(_stop.Token));
         }
@@ -181,6 +228,7 @@ namespace ConnectivityProbe
                 catch (AggregateException) { /* Monitor'e ulaşılamadı; pod birkaç tur sonra "eksik" görünür */ }
             }
 
+            _health?.Dispose();
             _http.Dispose();
             lock (StartLock)
             {
@@ -259,6 +307,8 @@ namespace ConnectivityProbe
                         try
                         {
                             pending = await RunTestsAsync(assignment, ct).ConfigureAwait(false);
+                            _lastRunTotal = pending.Results.Count;
+                            _lastRunFailed = pending.Results.Count(r => r.Tcp == null || !r.Tcp.HostnameAttempts.Any(a => a.Success));
                             continue; // beklemeden gönder
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -311,6 +361,19 @@ namespace ConnectivityProbe
                 // TLS: port açıksa el sıkışıp sertifikayı okuyoruz (bitiş tarihi, ad uyumu, güven zinciri).
                 if (connection.Tls && result.Tcp.HostnameAttempts.Any(a => a.Success))
                     result.Tls = await TlsProbe.ProbeAsync(host, port, timeout, ct).ConfigureAwait(false);
+
+                // Health: hedef servisin ConnectivityProbe health ucu (DLL'i kullanıyor mu, kullanıyorsa durumu).
+                if (connection.Health.Count > 0)
+                {
+                    var healthTimeout = (int)Math.Min(timeout.TotalMilliseconds, 5000);
+                    var checks = await Task.WhenAll(connection.Health.Take(20).Select(async h =>
+                    {
+                        var r = await HealthProbe.CheckAsync(h.Host, h.Port, healthTimeout, ct).ConfigureAwait(false);
+                        r.Instance = h.Instance;
+                        return r;
+                    })).ConfigureAwait(false);
+                    result.Health = checks.ToList();
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -491,6 +554,7 @@ namespace ConnectivityProbe
         {
             var identity = PodIdentityBuilder.Build(_app, _options.AppName);
             identity.PrimaryAddress = PrimaryAddress(identity.LocalAddresses);
+            identity.HealthPort = _health?.Port;
             var report = new AgentReport
             {
                 AppName = identity.AppName,
@@ -498,7 +562,8 @@ namespace ConnectivityProbe
                 PollSeconds = Math.Max(1, _options.PollSeconds),
                 Run = run,
                 Resources = _resources.Sample(),
-                Settings = Volatile.Read(ref _settings)
+                Settings = Volatile.Read(ref _settings),
+                Groups = _options.Groups.Where(g => !string.IsNullOrWhiteSpace(g.Name) && g.Keywords.Any(k => !string.IsNullOrWhiteSpace(k))).ToList()
             };
 
             using (var request = NewRequest(ReportPath, Json.Serialize(report)))
@@ -591,7 +656,13 @@ namespace ConnectivityProbe
                         Id = Json.GetString(c, "id") ?? "",
                         Host = Json.GetString(c, "host") ?? "",
                         Port = Json.GetDouble(c, "port") is double p ? (int)p : (int?)null,
-                        Tls = Json.GetBool(c, "tls")
+                        Tls = Json.GetBool(c, "tls"),
+                        Health = Json.GetObjectList(c, "health").Select(h => new HealthTarget
+                        {
+                            Host = Json.GetString(h, "host") ?? "",
+                            Port = (int)Json.GetLong(h, "port"),
+                            Instance = Json.GetString(h, "instance")
+                        }).Where(h => h.Host.Length > 0 && h.Port > 0 && h.Port <= 65535).ToList()
                     }).Where(c => c.Id.Length > 0).ToList()
                 };
                 if (Json.GetLong(o, "intervalSeconds") is long interval && interval > 0) a.IntervalSeconds = (int)interval;
@@ -607,6 +678,15 @@ namespace ConnectivityProbe
             public int? Port { get; set; }
             /// <summary>TCP'ye ek olarak TLS el sıkışması ve sertifika kontrolü yapılsın mı (Monitor belirler).</summary>
             public bool Tls { get; set; }
+            /// <summary>Health'i sorgulanacak adresler (Monitor belirler: hedef servis ya da hedef uygulamanın pod'ları).</summary>
+            public List<HealthTarget> Health { get; set; } = new List<HealthTarget>();
+        }
+
+        internal sealed class HealthTarget
+        {
+            public string Host { get; set; } = "";
+            public int Port { get; set; }
+            public string? Instance { get; set; }
         }
     }
 }
