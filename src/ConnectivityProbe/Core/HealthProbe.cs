@@ -28,6 +28,9 @@ namespace ConnectivityProbe
         public string? AppId { get; set; }
         public string? AppName { get; set; }
         public string? AppVersion { get; set; }
+        /// <summary>Cevap veren pod'un kimliği ve makine adı (imzadan): load balancer arkasında hangi pod'un cevap verdiği.</summary>
+        public string? InstanceId { get; set; }
+        public string? MachineName { get; set; }
         public long ElapsedMs { get; set; }
         public string? Error { get; set; }
     }
@@ -110,6 +113,8 @@ namespace ConnectivityProbe
                         result.AppId = Json.GetString(o, "appId");
                         result.AppName = Json.GetString(o, "appName");
                         result.AppVersion = Json.GetString(o, "appVersion");
+                        result.InstanceId = Json.GetString(o, "instanceId");
+                        result.MachineName = Json.GetString(o, "machineName");
                     }
                 }
                 catch (FormatException)

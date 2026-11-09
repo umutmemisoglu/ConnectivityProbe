@@ -34,6 +34,7 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 - [Cluster'lar (ağlar)](#clusterlar-ağlar)
 - [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)
 - [Ayarlardaki bağımlılıklar](#ayarlardaki-bağımlılıklar-22)
+- [Health ucu ve bağlantı grupları](#health-ucu-ve-bağlantı-grupları-23)
 - [Konsol mesajları](#konsol-mesajları)
 - [Seçenekler](#seçenekler)
 - [Güvenlik](#güvenlik)
@@ -392,6 +393,43 @@ alanlara hiç bakılmaz.
   (uyarıyla gösterilir).
 - Deploy sırasında yalnızca en son başlayan pod'un ayarları uygulanır; eski pod'lar tanımları geri alamaz.
 
+## Health ucu ve bağlantı grupları (2.3+)
+
+**Health ucu.** ConnectivityProbe kullanan her uygulama **ayrı bir portta** kendi küçük health ucunu açar:
+
+```
+http://<pod-ip>:29470/connectivityprobe/health
+```
+
+- ASP.NET Core, klasik ASP.NET / IIS, Worker Service, konsol ve Windows servislerinde, desteklenen tüm .NET sürümlerinde
+  aynı çalışır: kütüphane portu kendisi dinler (ham TCP), web sunucusu ya da ek satır gerekmez.
+- Uygulamanın kendi `/health` ucuyla asla çakışmaz: port da yol da farklıdır.
+- **29470 portu** işletim sistemlerinin giden bağlantılara verdiği aralıkların (Linux 32768–60999, Windows 49152–65535)
+  dışındadır ve yaygın servislerce kullanılmaz. Port başkasıyla paylaşılmadan açılır; doluysa sıradaki 9 port, o da olmazsa
+  boş bir port kullanılır. Kullanılan port Monitor'e bildirilir.
+- Cevapta ConnectivityProbe imzası (`X-ConnectivityProbe` başlığı ve `connectivityProbe` alanı), durum (`Healthy`; son
+  testte erişilemeyen bağlantı varsa `Degraded`), uygulama, sürüm ve pod bilgisi vardır. Uygulama anahtarı cevapta yoktur.
+- Seçenekler: `HealthEnabled` (varsayılan `true`), `HealthPort` (varsayılan `29470`).
+
+**Kim kullanır.** Bağlantı testleri yine **pod'ların içinden** yapılır. **Monitor** her pod'un health ucunu sorgular
+(detay sayfasında pod başına health) ve uygulamanın kullandığı servislerin ConnectivityProbe kullanıp kullanmadığına bakar:
+imzalı cevap *var* demektir (bağlantının hedef uygulaması da kendiliğinden işaretlenir), "bağlantı reddedildi" ya da portta
+başka bir servis *yok* demektir, zaman aşımı *belirsiz*dir (ör. Kubernetes Service yalnızca uygulamanın portunu açar).
+Monitor'ün pod'lara / servislere bu port üzerinden ağ erişimi olmalıdır.
+
+**Bağlantı grupları.** Anahtar kelimeleriyle grup verin; Monitor adında ya da adresinde kelimelerden biri geçen bağlantıları
+uygulamanın detay sayfasında o grubun altında toplar:
+
+```csharp
+ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
+{
+    o.AddGroup("Ödeme servisleri", "pay", "billing");
+    o.AddGroup("Arama", "elastic", "kibana");
+});
+```
+
+Diğer bağlantılar türüne göre gösterilir: Servisler, Veritabanları, Kuyruklar, Cache, Diğer.
+
 ## Konsol mesajları
 
 Kütüphane hiçbir zaman hata fırlatmaz, stack trace yazmaz. Konsola (ve `System.Diagnostics.Trace`'e) `[ConnectivityProbe]`
@@ -428,6 +466,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `MaxParallelTests` | 4 | Bir pod'da aynı anda test edilen bağlantı sayısı. |
 | `SettingsUrl` / `SettingsJson` / `Settings` | — | Uygulamanın ayarları: içindeki bağımlılıklar Monitor'de kendiliğinden tanımlanır (bkz. [Ayarlardaki bağımlılıklar](#ayarlardaki-bağımlılıklar-22)). |
 | `SettingsRefreshMinutes` | 10 | Ayarların yeniden okunma aralığı (dk). |
+| `HealthEnabled` / `HealthPort` | true / 29470 | Ayrı portta ConnectivityProbe health ucu (bkz. [Health ucu](#health-ucu-ve-bağlantı-grupları-23)). |
+| `AddGroup(ad, kelimeler…)` | — | Bağlantıları Monitor'de anahtar kelimeye göre gruplar. |
 
 `ConnectivityProbeAgent.Current` çalışan agent'ı döner (süreç başına bir tane); `LastContactUtc`, `LastRunUtc`,
 `LastError` ve `AppId` özelliklerini sunar.
@@ -567,7 +607,8 @@ Adımlar:
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **2.2.0** | Ayarlardaki bağımlılıklar: `SettingsUrl` / `SettingsJson` / `Settings` verilirse içindeki veritabanları, kuyruklar ve servisler Monitor'de kendiliğinden tanımlanır (pod'dan yalnızca tür, sunucu ve port çıkar); değişiklik takibi ve isteğe bağlı protokol doğrulaması (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: isteğe bağlı MongoDB depolama. |
+| **2.3.0** | Her tür uygulamada ayrı portta health ucu (`http://<pod-ip>:29470/connectivityprobe/health`), ConnectivityProbe imzasıyla; Monitor pod sağlığını ve servislerin ConnectivityProbe kullanıp kullanmadığını sorgular. Bağlantı grupları (`o.AddGroup`). |
+| 2.2.0 | Ayarlardaki bağımlılıklar: `SettingsUrl` / `SettingsJson` / `Settings` verilirse içindeki veritabanları, kuyruklar ve servisler Monitor'de kendiliğinden tanımlanır (pod'dan yalnızca tür, sunucu ve port çıkar); değişiklik takibi ve isteğe bağlı protokol doğrulaması (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: isteğe bağlı MongoDB depolama. |
 | 2.1.0 | Pod kaynakları (CPU, bellek ve limitler, throttling, OOM, thread'ler, TCP soketleri), TLS / sertifika kontrolü, DNS süresi, yavaşlama ve yeniden başlama tespiti. Pod'lar kendi IP adresini bildirir (`POD_IP` veya Monitor'e giden yol); Monitor cluster'ları pod ağıyla adlandırır (ör. `10.42.0.0/16`). Monitor: sürümler ve ağ gruplaması detay penceresinde, Türkçe / İngilizce arayüz. |
 | 2.0.0 | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |
 | 1.1.0 | Strict mod: pod'lar uygulama anahtarıyla tanımlarını çeker, içeriden test eder ve sonucu gönderir. |

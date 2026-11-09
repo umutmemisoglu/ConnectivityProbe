@@ -51,9 +51,10 @@ public class HealthTests
     [Fact]
     public async Task Probe_reads_status_and_application_of_a_connectivityprobe_service()
     {
-        using var server = HealthServer.Start(FreePort(), () => "{\"connectivityProbe\":\"x\",\"status\":\"Degraded\",\"appId\":\"a1\",\"appName\":\"Orders API\",\"appVersion\":\"1.2.3\"}")!;
+        using var server = HealthServer.Start(FreePort(), () => "{\"connectivityProbe\":\"x\",\"status\":\"Degraded\",\"appId\":\"a1\",\"appName\":\"Orders API\",\"appVersion\":\"1.2.3\",\"instanceId\":\"pod-7\",\"machineName\":\"orders-7f9\"}")!;
         var r = await HealthProbe.CheckAsync("127.0.0.1", server.Port, 3000, CancellationToken.None);
         Assert.Equal(("probe", true, "Degraded", "a1", "Orders API", "1.2.3"), (r.Outcome, r.Implemented, r.Status, r.AppId, r.AppName, r.AppVersion));
+        Assert.Equal(("pod-7", "orders-7f9"), (r.InstanceId, r.MachineName));   // hangi pod'un cevap verdiği
     }
 
     [Fact]

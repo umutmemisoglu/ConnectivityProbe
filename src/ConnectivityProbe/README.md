@@ -30,7 +30,9 @@ That's all. Every pod then:
 - reports its **resource usage**: CPU, memory, threads; in a container also CPU / memory **limits, throttling, OOM kills**
   and TCP sockets (2.1+),
 - checks **TLS certificates** (expiry, name, trust) of `https://` / TLS targets and measures DNS time (2.1+),
-- says goodbye on shutdown, so deploys and scale-downs raise no alarm.
+- says goodbye on shutdown, so deploys and scale-downs raise no alarm,
+- opens its own health endpoint on a separate port, `http://<pod-ip>:29470/connectivityprobe/health`, in every kind of
+  application (web, worker, console, IIS); it never collides with your own `/health` (2.3+).
 
 Optionally give the application's settings and its dependencies are defined in the Monitor automatically (2.2+); only
 type, server and port leave the pod, never passwords:

@@ -35,6 +35,7 @@ one screen.
 - [Clusters (networks)](#clusters-networks)
 - [Resources, TLS and latency](#resources-tls-and-latency-21)
 - [Dependencies from settings](#dependencies-from-settings-22)
+- [Health endpoint and connection groups](#health-endpoint-and-connection-groups-23)
 - [Console messages](#console-messages)
 - [Options](#options)
 - [Security](#security)
@@ -397,6 +398,44 @@ key are not even read.
 - Settings are re-read every `SettingsRefreshMinutes` (10). A failed read keeps the previous result (shown with a warning).
 - During a deploy only the most recently started pod's settings apply, so old pods cannot roll the definitions back.
 
+## Health endpoint and connection groups (2.3+)
+
+**Health endpoint.** Every application with ConnectivityProbe opens its own small health endpoint on a **separate port**:
+
+```
+http://<pod-ip>:29470/connectivityprobe/health
+```
+
+- Works the same in ASP.NET Core, classic ASP.NET / IIS, Worker Service, console and Windows services, on every supported
+  .NET: the library listens on the port itself (raw TCP), no web server or extra line of code is needed.
+- It never collides with the application's own `/health`: different port, different path.
+- **Port 29470** is outside the ranges operating systems hand out for outgoing connections (Linux 32768–60999, Windows
+  49152–65535) and is not used by common services. The port is opened exclusively; if it is busy, the next 9 ports are
+  tried, then a free port. The port in use is reported to the Monitor.
+- The answer carries a ConnectivityProbe signature (`X-ConnectivityProbe` header and `connectivityProbe` field), the status
+  (`Healthy`, or `Degraded` when the last test could not reach a connection), application, version and pod (instanceId, machine name, so a caller behind a load balancer knows which pod answered). The application
+  key is not included.
+- Options: `HealthEnabled` (default `true`), `HealthPort` (default `29470`).
+
+**Who uses it.** Connection tests are still made **from inside the pods**. The **Monitor** queries every pod's health
+endpoint (per-pod health on the details page) and checks whether the services an application uses run ConnectivityProbe:
+a signed answer means *yes* (and the connection's target application is set automatically), "connection refused" or
+another service on the port means *no*, a timeout means *unknown* (e.g. a Kubernetes Service only exposes the application
+port). The Monitor needs network access to the pods / services on this port.
+
+**Connection groups.** Give groups with keywords; the Monitor shows the connections whose name or address contains one of
+the keywords together under the group on the application's details page:
+
+```csharp
+ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
+{
+    o.AddGroup("Payment services", "pay", "billing");
+    o.AddGroup("Search", "elastic", "kibana");
+});
+```
+
+The other connections are shown by type: Services, Databases, Queues, Cache, Other.
+
 ## Console messages
 
 The library never throws and never writes a stack trace. It writes a few English lines to the console (and to
@@ -433,6 +472,8 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `MaxParallelTests` | 4 | Connections tested at the same time in one pod. |
 | `SettingsUrl` / `SettingsJson` / `Settings` | — | The application's settings: their dependencies are defined in the Monitor automatically (see [Dependencies from settings](#dependencies-from-settings-22)). |
 | `SettingsRefreshMinutes` | 10 | How often the settings are read again. |
+| `HealthEnabled` / `HealthPort` | true / 29470 | The ConnectivityProbe health endpoint on its own port (see [Health endpoint](#health-endpoint-and-connection-groups-23)). |
+| `AddGroup(name, keywords…)` | — | Groups connections in the Monitor by keyword. |
 
 `ConnectivityProbeAgent.Current` returns the running agent (one per process); it exposes `LastContactUtc`, `LastRunUtc`,
 `LastError` and `AppId`.
@@ -574,7 +615,8 @@ Steps:
 
 | Version | Highlights |
 |---|---|
-| **2.2.0** | Dependencies from settings: give `SettingsUrl` / `SettingsJson` / `Settings` and the databases, queues and services in them are defined in the Monitor automatically (only type, server and port leave the pod), with change tracking and optional protocol-level verification (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: optional MongoDB storage. |
+| **2.3.0** | Health endpoint on its own port (`http://<pod-ip>:29470/connectivityprobe/health`) in every kind of application, with a ConnectivityProbe signature; the Monitor checks pod health and whether services use ConnectivityProbe. Connection groups (`o.AddGroup`). |
+| 2.2.0 | Dependencies from settings: give `SettingsUrl` / `SettingsJson` / `Settings` and the databases, queues and services in them are defined in the Monitor automatically (only type, server and port leave the pod), with change tracking and optional protocol-level verification (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: optional MongoDB storage. |
 | 2.1.0 | Pod resources (CPU, memory and limits, throttling, OOM, threads, TCP sockets), TLS / certificate checks, DNS time, slow-connection and restart detection. Pods report their own IP address (`POD_IP` or the route to the Monitor); the Monitor names clusters after the pod network (e.g. `10.42.0.0/16`). Monitor: versions and network grouping in the details window, Turkish / English UI. |
 | 2.0.0 | One line: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Automatic registration, application version / build per pod, automatic cluster grouping, no endpoints, no dependencies. |
 | 1.1.0 | Strict mode: pods pull their definitions with an app key, test from inside and report back. |

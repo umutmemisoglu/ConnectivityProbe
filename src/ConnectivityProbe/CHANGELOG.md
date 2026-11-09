@@ -1,5 +1,39 @@
 # Changelog / Değişiklik geçmişi
 
+## 2.3.0
+
+### English
+
+**Health endpoint on its own port and connection groups.**
+
+- Every application with ConnectivityProbe opens a health endpoint on a separate port:
+  `http://<pod-ip>:29470/connectivityprobe/health` (`HealthEnabled`, `HealthPort`). A tiny raw-TCP listener, so it works in
+  ASP.NET Core, classic ASP.NET / IIS, Worker Service, console and Windows services on every supported .NET and never
+  collides with the application's own `/health`. The port is opened exclusively; if busy, the next 9 ports, then a free port.
+  The port in use is reported (`PodIdentity.HealthPort`).
+- The answer carries a ConnectivityProbe signature (`X-ConnectivityProbe`) with status (Healthy / Degraded), application,
+  version and pod; the application key is not included.
+- `HealthProbe.CheckAsync` tells for sure whether a service uses ConnectivityProbe (probe / refused / other / timeout / dns).
+  The Monitor uses it to check pod health and the services an application uses; pods can also run it per connection when
+  the Monitor asks (`AgentResult.Health`).
+- Connection groups: `o.AddGroup("Payment services", "pay", "billing")` (`AgentReport.Groups`).
+
+### Türkçe
+
+**Ayrı portta health ucu ve bağlantı grupları.**
+
+- ConnectivityProbe kullanan her uygulama ayrı bir portta health ucu açar: `http://<pod-ip>:29470/connectivityprobe/health`
+  (`HealthEnabled`, `HealthPort`). Ham TCP üzerinde küçük bir dinleyici: ASP.NET Core, klasik ASP.NET / IIS, Worker Service,
+  konsol ve Windows servislerinde, desteklenen tüm .NET sürümlerinde çalışır; uygulamanın kendi `/health` ucuyla çakışmaz.
+  Port paylaşılmadan açılır; doluysa sıradaki 9 port, o da olmazsa boş bir port. Kullanılan port bildirilir
+  (`PodIdentity.HealthPort`).
+- Cevapta ConnectivityProbe imzası (`X-ConnectivityProbe`), durum (Healthy / Degraded), uygulama, sürüm ve pod vardır;
+  uygulama anahtarı yoktur.
+- `HealthProbe.CheckAsync` bir servisin ConnectivityProbe kullanıp kullanmadığını kesin söyler (probe / refused / other /
+  timeout / dns). Monitor bunu pod sağlığını ve uygulamaların kullandığı servisleri sorgulamak için kullanır; Monitor isterse
+  pod'lar da bağlantı başına çalıştırabilir (`AgentResult.Health`).
+- Bağlantı grupları: `o.AddGroup("Ödeme servisleri", "pay", "billing")` (`AgentReport.Groups`).
+
 ## 2.2.0
 
 ### English
