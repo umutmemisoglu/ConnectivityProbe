@@ -11,16 +11,15 @@ ConnectivityProbe, dışarıdan cevaplanması zor soruları cevaplar:
    Örneğin `orders-api`'nin her pod'u `sql01:1433`'e, Redis'e ve ödeme API'sine TCP bağlantısı açabiliyor mu?
 2. **Gerçekte kaç pod çalışıyor, hangi cluster'da ve her biri hangi sürümü / build'i çalıştırıyor?**
 
-Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesidir. Her pod, bu depodaki merkezi web uygulaması
-**ConnectivityProbe Monitor**'e kendini bildirir; Monitor yüzlerce uygulamayı tek ekranda gösterir.
+Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesidir. Her pod, merkezi web uygulaması
+**ConnectivityProbe Monitor**'e kendini bildirir; Monitor yüzlerce uygulamayı tek ekranda gösterir. Monitor ayrıca
+çalıştırılır; bu deponun ve NuGet paketinin parçası değildir.
 
 | Proje | Nedir |
 |---|---|
 | [`src/ConnectivityProbe`](src/ConnectivityProbe) | Kütüphane; NuGet'te [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe) olarak yayınlanır. Hedefler: `netstandard2.0` ve `net462`, **bağımlılığı yoktur**. |
-| [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Merkezi izleme uygulaması (ASP.NET Core web uygulaması). Pod'ları, sürümleri, cluster'ları ve sonuçları gösterir; bağlantı tanımlarını tutar. NuGet paketi **değildir**. |
 | [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Örnek ASP.NET Core uygulaması. |
 | [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Kütüphanenin birim ve uçtan uca testleri: `dotnet test tests/ConnectivityProbe.Tests` |
-| [`tests/ConnectivityProbe.Monitor.Tests`](tests/ConnectivityProbe.Monitor.Tests) | Monitor testleri (pod durumları, uyarılar, TLS, yavaşlık, ağlar, havuz kuralları): `dotnet test tests/ConnectivityProbe.Monitor.Tests` |
 
 ---
 
@@ -38,7 +37,7 @@ Uygulamanıza **tek satır kodla** eklediğiniz küçük bir .NET kütüphanesid
 - [Konsol mesajları](#konsol-mesajları)
 - [Seçenekler](#seçenekler)
 - [Güvenlik](#güvenlik)
-- [ConnectivityProbe Monitor](#connectivityprobe-monitor)
+- [Monitor](#monitor)
 - [1.x'ten geçiş](#1xten-geçiş)
 - [Sürüm geçmişi](#sürüm-geçmişi)
 
@@ -59,7 +58,8 @@ kapanırken    ──►  POST {MonitorUrl}/api/agent/v2/goodbye    → pod alar
 
 - **Kayıt adımı yoktur.** Yeni bir anahtarla bildirim gönderen ilk pod, uygulamayı Monitor'e kendiliğinden kaydeder. Aynı
   anahtarı kullanan pod'lar aynı uygulamadır; uygulama ikinci kez kaydedilmez.
-- **Uygulamanızda uç yoktur.** Kütüphane port açmaz, HTTP pipeline'ınıza bir şey eklemez. Pod'un yalnızca Monitor'e dışarı
+- **HTTP pipeline'ınıza bir şey eklenmez.** Kütüphane uygulamanıza yol (route) eklemez; ayrı porttaki küçük health ucu
+  (2.3+, kapatılabilir) dışında port açmaz. Pod'un yalnızca Monitor'e dışarı
   doğru HTTP(S) erişimi olması yeterlidir. HTTP'si olmayan uygulamalar (worker'lar, kuyruk tüketicileri, Windows
   servisleri) de aynı şekilde çalışır.
 - **Pod sayısı kesindir.** Her pod kendini bildirdiği için Monitor kaç pod çalıştığını ve her birinin ne gördüğünü bilir.
@@ -476,107 +476,23 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 
 ## Güvenlik
 
-- Kütüphane **hiç port ve uç açmaz**. Yalnızca `MonitorUrl`'e dışarı doğru HTTP(S) isteği yapar.
+- Kütüphane **uygulamanızın HTTP pipeline'ına bir şey eklemez**. `MonitorUrl`'e dışarı doğru HTTP(S) isteği yapar ve
+  2.3'ten itibaren kendi portunda salt okunur bir health ucu açar (`o.HealthEnabled = false` ile kapatılır).
 - Gönderdikleri: pod adı, makine adı, süreç kimliği, IP adresleri, işletim sistemi / .NET sürümü, uygulama adı / sürümü /
   build'i, cluster parmak izi, namespace, kaynak ölçümleri (CPU, bellek, thread'ler, TCP soket sayıları, ağ byte sayaçları),
   test sonuçları (TLS bağlantılarında sunucu sertifikasının sahibi, vereni ve tarihleri) ve yalnızca şu ortam değişkenleri: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. Başka hiçbir değişken okunmaz.
 - Pod yalnızca Monitor'de kendi uygulamasına bağlanmış bağlantıları test eder.
-- Monitor iç ağlar için tasarlanmıştır: kayıt açıktır ve uygulama anahtarı uygulamayı tanımlar ama şifre değildir. Monitor
-  arayüzü `Monitor:AdminPassword` verilmedikçe erişebilen herkese açıktır; yalnızca iç ağda, HTTPS arkasında yayınlayın.
+- Monitor iç ağlar için tasarlanmıştır: kayıt açıktır ve uygulama anahtarı uygulamayı tanımlar ama şifre değildir. Monitor'ü
+  yalnızca iç ağda, HTTPS arkasında yayınlayın.
 
 ---
 
-## ConnectivityProbe Monitor
+## Monitor
 
-```bash
-dotnet run --project src/ConnectivityProbe.Monitor
-```
-
-Varsayılan adres: http://localhost:5087/ . Monitor bağımsız bir uygulamadır, NuGet paketi değildir. Her ortam (test, prod)
-için ayrı bir Monitor çalıştırın. Arayüz **Türkçe ve İngilizce** kullanılabilir (üst menüde TR / EN).
-
-**Ekranlar**
-
-- **Monitör:** en kritik uygulama üstte büyük bir afişte; ardından "Dikkat gerektirenler" satırı ve her ekip için yatay
-  kayan bir satır. Her kart durumunu, pod sayısını, bağlantı özetini ve sürümünü gösterir. Uygulama, anahtar, ekip, sürüm,
-  ağ veya pod adıyla arayın.
-- **Detay sayfası** (yeni tarayıcı sekmesinde açılır, `/?app=<kimlik>`):
-  - **Sürümler:** her ağda hangi sürümün / build'in kaç pod'da çalıştığı.
-  - **Bağlantılar:** pod'ların ağlarına göre gruplandığı bağlantı × pod matrisi; bir hedefe yalnızca bir cluster'ın
-    erişemediği hemen görülür (hangi pod, ne zamandır). Hücrelerde DNS süresi, TLS sonucu / sertifikanın bitişine kalan
-    gün ve "yavaş" işareti de bulunur.
-  - **Kaynaklar:** her pod'un CPU, bellek (limitle), throttling, thread, TCP soket, ağ hızı ve yeniden başlama bilgisi;
-    ~10 dakikalık grafiklerle.
-  - **Pod'lar** ağa göre gruplanmış (ad, IP, sürüm, build, namespace, son bildirim), geçmiş ve *Pod listesini sıfırla*.
-- **Tanımlar:** birim ve ekiplerden bağımsız tek bir bağlantı havuzu; alaka sıralı arama (yazım hataları ve Türkçe karakter
-  eksikleri tolere edilir). Sağda Birimler → Ekipler → Uygulamalar; bağlantıyı uygulamanın üzerine sürükleyerek bağlayın,
-  uygulamayı bir ekibin üzerine sürükleyerek taşıyın. Bir bağlantı kayıtlı başka bir uygulamayı gösterebilir
-  ("hedef uygulama"); bu, matriste görünür.
-
-**Teams bildirimleri**
-
-Her uygulama, kişilerden bağımsız olarak **hangi durumlarda bildirim gönderileceğini** kendisi belirler (Tanımlar →
-uygulama kartı → 🔔 Bildirimler). Kurallar arayüzde kategorili ve açıklamalıdır:
-
-| Kategori | Kurallar (✔ = uygulama ilk kaydolduğunda işaretli) |
-|---|---|
-| Uygulama ve pod'lar | ✔ Uygulamaya erişilemiyor · ✔ Pod eksik · ✔ Sürekli yeniden başlama · Pod yeniden başladı |
-| Bağlantılar | ✔ Bağlantı koptu · ✔ Bağlantı kısmen koptu · Bağlantı yavaşladı · Hedefin IP adresi değişti |
-| Sertifika | ✔ Sertifika bitmek üzere (14 / 7 / 3 / 1 gün) · ✔ Sertifika geçersiz / süresi doldu |
-| Kaynaklar | ✔ Bellek limite yakın · CPU limiti yüzünden yavaşlama · Port tükeniyor |
-| Sürüm / deploy | Yeni sürüm yayına alındı · Deploy takıldı |
-| Seçenekler | ✔ Düzelince de haber ver |
-
-Bildirim almak isteyen, uygulamada **🔔 Bana haber ver**'e tıklar (Tanımlar veya detay sayfası), Microsoft (Teams)
-hesabıyla giriş yapar ve otomatik abone olur; sonrasında tek tıktır. Tek seferlik kurulum (Entra ID uygulama kaydı + merkezi
-Teams iş akışı) **Ayarlar → Teams bildirimleri** ekranından yapılır: [docs/teams-kurulum.md](docs/teams-kurulum.md).
-
-Bildirimler rahatsız etmeyecek şekilde tasarlandı: bir durum **ancak doğrulandıktan sonra** bildirilir (ör. üst üste 3
-başarısız test, bellek 5 dakika boyunca yüksek); olay başına **bir kez**; bir uygulamanın aynı turdaki tüm gelişmeleri
-**tek mesajda**; sürekli açılıp kapanan bir durum için tek bir "kararsız" mesajı; deploy'dan kaynaklanan yeniden başlamalar
-bildirilmez; açık olaylar Monitor yeniden başlasa da unutulmaz (`data/notify-state.json`). Monitor'ün Teams'e dışarı
-doğru HTTPS erişimi olmalıdır (sistem proxy'si / `HTTPS_PROXY` kullanılır).
-
-**Pod durumları**
-
-| Durum | Anlamı |
-|---|---|
-| Çalışıyor | Pod son 2 × `PollSeconds` (+5 sn) içinde bildirim gönderdi. |
-| Bildirim gecikti | Bildirim gecikti ama eşik henüz dolmadı. Alarm değildir. |
-| Eksik | `MissingAfterCycles` (3) test aralığı boyunca bildirim yok ve pod sayısı düştü. **Alarm.** Yalnızca *Pod listesini sıfırla* ile silinir; geri gelen pod kendiliğinden normale döner. |
-| (ayrıldı) | Pod veda etti (deploy, scale-down) veya sayı aynı kalırken yerine yeni pod geldi. Alarm yok. |
-
-**Ayarlar** (`appsettings.json` → `Monitor` veya ortam değişkenleri `Monitor__<Ad>`)
-
-| Ayar | Varsayılan | Anlamı |
-|---|---|---|
-| `AdminUser` / `AdminPassword` | `admin` / boş | İsteğe bağlı arayüz girişi. Şifre yoksa arayüz Monitor'e erişebilen herkese açıktır; şifre verilirse giriş sayfası çıkar. Agent uçları (`/api/agent/*`) hiçbir zaman giriş istemez. |
-| `IntervalSeconds` | 30 | Pod'lara gönderilen test aralığı. |
-| `ProbeTimeoutMs` | 5000 | Pod'lara gönderilen bağlantı zaman aşımı. |
-| `MissingAfterCycles` | 3 | Bir pod'un "eksik" sayılması için bildirimsiz geçen test aralığı. |
-| `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Uyarı eşikleri (bkz. [Kaynaklar, TLS ve gecikme](#kaynaklar-tls-ve-gecikme-21)). |
-| `DataFile` | `data/definitions.json` | Tanımlar. Pod durumu (`pod-state.json`) ve giriş anahtarları (`keys/`) yanında tutulur. |
-| `Mongo:ConnectionString` / `Mongo:Database` | boş / `connectivity_monitor` | Dosyalar yerine MongoDB (yalnızca Monitor; NuGet kütüphanesi etkilenmez). Koleksiyonlar: units, teams, apps, connections, clusters, people, pods, documents, dataProtectionKeys. İlk açılışta dosyalardaki veriler aktarılır. Açılışta Mongo'ya erişilemezse Monitor açılmaz. Bağlantı adresi şifre içerir: secret olarak verin (`Monitor__Mongo__ConnectionString`). |
-| `PublicUrl` | boş | Kullanıcıların açtığı adres (ör. `https://monitor.sirket.com`). TLS önde sonlanıp `https` bilgisi iletilmiyorsa verin; Microsoft girişi ve Teams bağlantıları bunu kullanır. Ayarlar ekranından da girilebilir. |
-
-**Docker / Kubernetes**
-
-Monitor kütüphaneyi kaynak koddan kullandığı için imaj deponun kökünden derlenir:
-
-```bash
-docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
-docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
-```
-
-- **8080** portunu (http) dinler. TLS'i sonlandıran bir ingress / proxy arkasında yayınlayın; `X-Forwarded-Proto` ve
-  `X-Forwarded-Host` dikkate alınır (Microsoft girişi için gerekli).
-- **Veriler:** ya MongoDB verin (`Monitor__Mongo__ConnectionString`, secret olarak; o zaman volume gerekmez) ya da
-  `/app/data`'yı kalıcı yapın (volume; Kubernetes'te PersistentVolumeClaim): tanımlar, pod durumu, ayarlar ve oturum
-  anahtarları buradadır. İki durumda da **tek replika** çalıştırın: anlık durum bellekte tutulur.
-- Arayüz girişsiz açılır. Giriş istenirse `Monitor__AdminPassword` verin (secret olarak).
-- `GET /healthz` girişsiz `ok` döner (liveness / readiness kontrolleri için).
-- Container root olmayan `app` kullanıcısıyla çalışır.
+Kütüphane bir ConnectivityProbe Monitor'e (`MonitorUrl`) bildirim gönderir: Monitor bu deponun ve NuGet paketinin
+parçası olmayan ayrı bir web uygulamasıdır. Her ortam (test, prod) için bir Monitor çalıştırılır; pod'ların yalnızca ona
+dışarı doğru HTTP(S) erişimi olmalıdır.
 
 ---
 

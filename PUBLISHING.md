@@ -1,7 +1,7 @@
 # ConnectivityProbe NuGet paketini yayınlama
 
 Pakete yalnızca kütüphane girer: `src/ConnectivityProbe` (`ConnectivityProbeAgent`, bağımlılıksız).
-Monitor, örnek uygulama ve testler pakete girmez.
+Örnek uygulama ve testler pakete girmez.
 
 ## Kısa yol (kullanılan yöntem): GitHub Actions
 

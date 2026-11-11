@@ -11,17 +11,15 @@ ConnectivityProbe answers questions that are hard to answer from the outside:
    For example: can every pod of `orders-api` open a TCP connection to `sql01:1433`, to Redis and to the payment API?
 2. **How many pods are really running, in which cluster, and which version / build is each one running?**
 
-It is a small .NET library you add to your application with **one line of code**. Every pod reports to
-**ConnectivityProbe Monitor**, the central web application in this repository, which shows hundreds of applications on
-one screen.
+It is a small .NET library you add to your application with **one line of code**. Every pod reports to a
+**ConnectivityProbe Monitor**, a central web application that shows hundreds of applications on one screen. The
+Monitor is run separately; it is not part of this repository or the NuGet package.
 
 | Project | What it is |
 |---|---|
 | [`src/ConnectivityProbe`](src/ConnectivityProbe) | The library, published on NuGet as [`ConnectivityProbe`](https://www.nuget.org/packages/ConnectivityProbe). Targets `netstandard2.0` and `net462`, **no dependencies**. |
-| [`src/ConnectivityProbe.Monitor`](src/ConnectivityProbe.Monitor) | Central monitor (ASP.NET Core web app). Shows pods, versions, clusters and results; holds the connection definitions. **Not** a NuGet package. |
 | [`samples/ConnectivityProbe.SampleApi`](samples/ConnectivityProbe.SampleApi) | Sample ASP.NET Core app. |
 | [`tests/ConnectivityProbe.Tests`](tests/ConnectivityProbe.Tests) | Library unit and end-to-end tests: `dotnet test tests/ConnectivityProbe.Tests` |
-| [`tests/ConnectivityProbe.Monitor.Tests`](tests/ConnectivityProbe.Monitor.Tests) | Monitor tests (pod states, alerts, TLS, slowness, networks, pool rules): `dotnet test tests/ConnectivityProbe.Monitor.Tests` |
 
 ---
 
@@ -39,7 +37,7 @@ one screen.
 - [Console messages](#console-messages)
 - [Options](#options)
 - [Security](#security)
-- [ConnectivityProbe Monitor](#connectivityprobe-monitor)
+- [The Monitor](#the-monitor)
 - [Upgrading from 1.x](#upgrading-from-1x)
 - [Version history](#version-history)
 
@@ -60,8 +58,9 @@ on shutdown  ──►  POST {MonitorUrl}/api/agent/v2/goodbye    → the pod le
 
 - **No registration step.** The first pod that reports with a new key registers the application in the Monitor
   automatically. Pods with the same key are the same application; it is never registered twice.
-- **No endpoint in your application.** The library opens no port and adds nothing to your HTTP pipeline. The pod only
-  needs outbound HTTP(S) to the Monitor. Applications without HTTP (workers, queue consumers, Windows services) work the
+- **Nothing added to your HTTP pipeline.** The library adds no route to your application; apart from its own small
+  health endpoint on a separate port (2.3+, can be turned off) it opens no port. The pod only needs outbound HTTP(S) to
+  the Monitor. Applications without HTTP (workers, queue consumers, Windows services) work the
   same way.
 - **Exact pod count.** Every pod reports itself, so the Monitor knows exactly how many pods run and what each one sees.
 - **Your application is never affected.** If the Monitor is unreachable or the settings are wrong, the library writes a
@@ -482,109 +481,23 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 
 ## Security
 
-- The library opens **no port and no endpoint**. It only makes outbound HTTP(S) requests to `MonitorUrl`.
+- The library adds **nothing to your application's HTTP pipeline**. It makes outbound HTTP(S) requests to `MonitorUrl`
+  and, from 2.3, opens one read-only health endpoint on its own port (`o.HealthEnabled = false` turns it off).
 - It sends: pod name, machine name, process id, IP addresses, OS / .NET version, application name / version / build,
   cluster fingerprint, namespace, resource figures (CPU, memory, threads, TCP socket counts, network byte counters),
   test results (for TLS connections the server certificate's subject, issuer and dates) and only these environment variables: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`,
   `NODE_NAME`, `HOSTNAME`, `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`, `APP_POOL_ID`. No other variable is ever read.
 - The pod tests only the connections that are attached to its application in the Monitor.
 - The Monitor is meant for internal networks: registration is open, and the app key identifies the application but is
-  not a password. The Monitor UI is open to everyone who can reach it unless `Monitor:AdminPassword` is set; publish it
-  only on the internal network, behind HTTPS.
+  not a password. Publish the Monitor only on the internal network,
+  behind HTTPS.
 
 ---
 
-## ConnectivityProbe Monitor
+## The Monitor
 
-```bash
-dotnet run --project src/ConnectivityProbe.Monitor
-```
-
-Default address: http://localhost:5087/ . The Monitor is a standalone application, not a NuGet package. Run one Monitor per
-environment (test, prod). The UI is available in **Turkish and English** (TR / EN switch in the top bar).
-
-**Screens**
-
-- **Monitor:** the most critical application in a large banner, then a "Needs attention" row and one horizontally
-  scrolling row per team. Each card shows its state, pod count, connection summary and version. Search by application,
-  key, team, version, network or pod name.
-- **Details page** (opens in a new browser tab, `/?app=<id>`):
-  - **Versions:** which version / build runs on how many pods in each network.
-  - **Connections:** a connection × pod matrix with the pods grouped under their network, so a target that only one
-    cluster cannot reach stands out (which pod, since when). Each cell also shows DNS time, TLS result / days to
-    certificate expiry and a "slow" mark.
-  - **Resources:** CPU, memory (with limit), throttling, threads, TCP sockets, network rate and restarts per pod, with
-    ~10-minute charts.
-  - **Pods** grouped by network (name, IP, version, build, namespace, last report), history and *Reset pod list*.
-- **Definitions:** one connection pool for everything, independent of units and teams, with ranked search (typos and
-  missing Turkish characters are tolerated). Units → Teams → Applications on the right; drag a connection onto an
-  application to attach it, drag an application onto a team to move it. A connection can point to another registered
-  application ("target application"), which is shown in the matrix.
-
-**Teams notifications**
-
-Each application decides, independently of people, **which situations send a notification** (Definitions → application
-card → 🔔 Notifications). The rules are grouped and described in the UI:
-
-| Category | Rules (✔ = selected when the application first registers) |
-|---|---|
-| Application and pods | ✔ Application unreachable · ✔ Pod missing · ✔ Crash loop · Pod restarted |
-| Connections | ✔ Connection down · ✔ Connection partly down · Connection slow · Target IP changed |
-| Certificate | ✔ Certificate expiring (14 / 7 / 3 / 1 days) · ✔ Certificate invalid / expired |
-| Resources | ✔ Memory close to the limit · CPU throttled · Running out of ports |
-| Version / deploy | New version deployed · Deploy stuck |
-| Options | ✔ Also notify when resolved |
-
-Anyone who wants the notifications clicks **🔔 Notify me** on the application (Definitions or the details page), signs in
-with their Microsoft (Teams) account and is subscribed automatically; after that it is a single click. The one-time setup
-(Entra ID app registration + a central Teams workflow) is done under **Settings → Teams notifications**:
-[docs/teams-setup.md](docs/teams-setup.md).
-
-Notifications are designed not to be noisy: a situation is reported **only after it is confirmed** (e.g. 3 failed tests
-in a row, memory high for 5 minutes), **once** per incident, with all changes of an application in **one message**; a
-situation that keeps opening and closing sends a single "unstable" message; restarts caused by a deploy are not reported;
-open incidents survive a Monitor restart (`data/notify-state.json`). The Monitor needs outbound HTTPS to Teams
-(the system proxy / `HTTPS_PROXY` is used).
-
-**Pod states**
-
-| State | Meaning |
-|---|---|
-| Running | The pod reported within the last 2 × `PollSeconds` (+5 s). |
-| Report late | The report is late, but the threshold is not reached yet. Not an alarm. |
-| Missing | No report for `MissingAfterCycles` (3) test intervals while the pod count went down. **Alarm.** Removed only with *Reset pod list*; a pod that comes back returns to normal by itself. |
-| (gone) | The pod said goodbye (deploy, scale-down), or it was replaced by a new pod while the count stayed the same. No alarm. |
-
-**Settings** (`appsettings.json` → `Monitor`, or environment variables `Monitor__<Name>`)
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `AdminUser` / `AdminPassword` | `admin` / empty | Optional UI login. Without a password the UI is open to everyone who can reach the Monitor; with one, a login page is shown. The agent endpoints (`/api/agent/*`) never require a login. |
-| `IntervalSeconds` | 30 | Test interval sent to the pods. |
-| `ProbeTimeoutMs` | 5000 | Connection timeout sent to the pods. |
-| `MissingAfterCycles` | 3 | Test intervals without a report before a pod is "missing". |
-| `Alerts:MemoryPercent` / `CpuThrottledPercent` / `PortsPercent` / `CertificateDays` / `RecentMinutes` | 90 / 25 / 70 / 14 / 60 | Alert thresholds (see [Resources, TLS and latency](#resources-tls-and-latency-21)). |
-| `DataFile` | `data/definitions.json` | Definitions. Pod state (`pod-state.json`) and login keys (`keys/`) are kept next to it. |
-| `Mongo:ConnectionString` / `Mongo:Database` | empty / `connectivity_monitor` | MongoDB instead of files (only the Monitor; the NuGet library is unaffected). Collections: units, teams, apps, connections, clusters, people, pods, documents, dataProtectionKeys. On the first start, the data in the files is imported. If Mongo cannot be reached at startup, the Monitor does not start. The connection string contains a password: give it as a secret (`Monitor__Mongo__ConnectionString`). |
-| `PublicUrl` | empty | The address people open (e.g. `https://monitor.company.com`). Set it when TLS is terminated in front and `https` is not passed on; Microsoft sign-in and Teams links use it. Also editable under Settings. |
-
-**Docker / Kubernetes**
-
-The Monitor uses the library from source, so build from the repository root:
-
-```bash
-docker build -f src/ConnectivityProbe.Monitor/Dockerfile -t connectivity-monitor .
-docker run -d -p 8080:8080 -v cpmonitor-data:/app/data connectivity-monitor
-```
-
-- Listens on **8080** (http). Publish it behind an ingress / proxy that terminates TLS; `X-Forwarded-Proto` and
-  `X-Forwarded-Host` are honored (needed for Microsoft sign-in).
-- **Data:** either give MongoDB (`Monitor__Mongo__ConnectionString`, as a secret; then no volume is needed), or make
-  `/app/data` persistent (a volume, in Kubernetes a PersistentVolumeClaim): definitions, pod state, settings and login keys
-  live there. Run a **single replica** in both cases: the live state is kept in memory.
-- The UI opens without a login. To require one, set `Monitor__AdminPassword` (as a secret).
-- `GET /healthz` returns `ok` without a login, for liveness / readiness probes.
-- The container runs as the non-root `app` user.
+The library reports to a ConnectivityProbe Monitor (`MonitorUrl`): a separate web application that is not part of this
+repository or the NuGet package. Run one Monitor per environment (test, prod); the pods only need outbound HTTP(S) to it.
 
 ---
 
