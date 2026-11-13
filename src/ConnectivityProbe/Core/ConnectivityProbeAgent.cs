@@ -28,6 +28,11 @@ namespace ConnectivityProbe
         public DiscoveredSettings? Settings { get; set; }
         /// <summary>Bağlantı grupları (ör. "Ödeme servisleri": pay, billing); Monitor detayda bağlantıları bunlara göre gruplar.</summary>
         public List<ConnectionGroup> Groups { get; set; } = new List<ConnectionGroup>();
+        /// <summary>
+        /// Uygulamanın çağrıldığı adresler (gelen isteklerin Host değeri, ör. orders.example.com; yalnızca ASP.NET Core). Monitor
+        /// başka uygulamaların bağlantı adresleriyle birebir eşleştirip bağlantının hedef uygulamasını bulur (ingress arkasında da).
+        /// </summary>
+        public List<string>? ServedHosts { get; set; }
     }
 
     /// <summary>Bir pod'un bir test turu.</summary>
@@ -83,6 +88,7 @@ namespace ConnectivityProbe
         private readonly Task _loop;
         private int _stopped;
         private readonly HealthServer? _health;
+        private readonly ServedHosts? _served;
         private volatile int _lastRunTotal = -1;   // -1: henüz test yapılmadı
         private volatile int _lastRunFailed;
 
@@ -133,6 +139,9 @@ namespace ConnectivityProbe
                 if (_health == null) Say("Health endpoint could not be opened.");
                 else if (_health.Port != options.HealthPort) Say("Health port " + options.HealthPort + " is in use; health endpoint on port " + _health.Port + ".");
             }
+
+            // Uygulamanın çağrıldığı adresler (ASP.NET Core'da gelen isteklerin Host değeri; isteğe dokunulmaz).
+            if (options.ReportServedHosts) _served = ServedHosts.Start();
 
             _loop = Task.Run(() => LoopAsync(_stop.Token));
         }
@@ -229,6 +238,7 @@ namespace ConnectivityProbe
             }
 
             _health?.Dispose();
+            _served?.Dispose();
             _http.Dispose();
             lock (StartLock)
             {
@@ -563,7 +573,8 @@ namespace ConnectivityProbe
                 Run = run,
                 Resources = _resources.Sample(),
                 Settings = Volatile.Read(ref _settings),
-                Groups = _options.Groups.Where(g => !string.IsNullOrWhiteSpace(g.Name) && g.Keywords.Any(k => !string.IsNullOrWhiteSpace(k))).ToList()
+                Groups = _options.Groups.Where(g => !string.IsNullOrWhiteSpace(g.Name) && g.Keywords.Any(k => !string.IsNullOrWhiteSpace(k))).ToList(),
+                ServedHosts = _served?.Snapshot() is { Count: > 0 } hosts ? hosts : null
             };
 
             using (var request = NewRequest(ReportPath, Json.Serialize(report)))

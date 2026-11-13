@@ -422,6 +422,17 @@ a signed answer means *yes* (and the connection's target application is set auto
 another service on the port means *no*, a timeout means *unknown* (e.g. a Kubernetes Service only exposes the application
 port). The Monitor needs network access to the pods / services on this port.
 
+**Services behind an ingress (2.4+).** An ingress or load balancer exposes only the application's web port, so 29470
+cannot be reached at a service's public address (e.g. `https://orders.example.com`). ConnectivityProbe therefore also
+learns, on its own, **at which addresses the application is called**: in ASP.NET Core it listens to the event the framework
+publishes at the start of every request and reads the request's host name (the request itself is not touched; IP addresses
+and localhost are skipped, at most 20 names). The pods report these names to the Monitor, which matches them with the
+connection addresses of other applications: when `orders.example.com` is called only for *Orders API*, every connection to
+that address gets *Orders API* as its target application for sure, and its health is shown from Orders API's pods. Nothing
+has to be added or configured in the application. If the same name is called for more than one application (e.g. an ingress
+that routes by path), no target is set. Turn it off with `o.ReportServedHosts = false`. Worker, console and classic ASP.NET
+applications do not report addresses.
+
 **Connection groups.** Give groups with keywords; the Monitor shows the connections whose name or address contains one of
 the keywords together under the group on the application's details page:
 
@@ -472,6 +483,7 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `SettingsUrl` / `SettingsJson` / `Settings` | — | The application's settings: their dependencies are defined in the Monitor automatically (see [Dependencies from settings](#dependencies-from-settings-22)). |
 | `SettingsRefreshMinutes` | 10 | How often the settings are read again. |
 | `HealthEnabled` / `HealthPort` | true / 29470 | The ConnectivityProbe health endpoint on its own port (see [Health endpoint](#health-endpoint-and-connection-groups-23)). |
+| `ReportServedHosts` | true | Report the host names the application is called at (ASP.NET Core) so the Monitor can identify the target of other applications' connections (see [Services behind an ingress](#health-endpoint-and-connection-groups-23)). |
 | `AddGroup(name, keywords…)` | — | Groups connections in the Monitor by keyword. |
 
 `ConnectivityProbeAgent.Current` returns the running agent (one per process); it exposes `LastContactUtc`, `LastRunUtc`,
@@ -528,7 +540,8 @@ Steps:
 
 | Version | Highlights |
 |---|---|
-| **2.3.0** | Health endpoint on its own port (`http://<pod-ip>:29470/connectivityprobe/health`) in every kind of application, with a ConnectivityProbe signature; the Monitor checks pod health and whether services use ConnectivityProbe. Connection groups (`o.AddGroup`). |
+| **2.4.0** | Services behind an ingress are identified for sure: the pods report the host names the application is called at (ASP.NET Core, read-only, nothing to configure) and the Monitor matches them with other applications' connection addresses (`ReportServedHosts`). |
+| 2.3.0 | Health endpoint on its own port (`http://<pod-ip>:29470/connectivityprobe/health`) in every kind of application, with a ConnectivityProbe signature; the Monitor checks pod health and whether services use ConnectivityProbe. Connection groups (`o.AddGroup`). |
 | 2.2.0 | Dependencies from settings: give `SettingsUrl` / `SettingsJson` / `Settings` and the databases, queues and services in them are defined in the Monitor automatically (only type, server and port leave the pod), with change tracking and optional protocol-level verification (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: optional MongoDB storage. |
 | 2.1.0 | Pod resources (CPU, memory and limits, throttling, OOM, threads, TCP sockets), TLS / certificate checks, DNS time, slow-connection and restart detection. Pods report their own IP address (`POD_IP` or the route to the Monitor); the Monitor names clusters after the pod network (e.g. `10.42.0.0/16`). Monitor: versions and network grouping in the details window, Turkish / English UI. |
 | 2.0.0 | One line: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Automatic registration, application version / build per pod, automatic cluster grouping, no endpoints, no dependencies. |

@@ -417,6 +417,16 @@ imzalı cevap *var* demektir (bağlantının hedef uygulaması da kendiliğinden
 başka bir servis *yok* demektir, zaman aşımı *belirsiz*dir (ör. Kubernetes Service yalnızca uygulamanın portunu açar).
 Monitor'ün pod'lara / servislere bu port üzerinden ağ erişimi olmalıdır.
 
+**Ingress arkasındaki servisler (2.4+).** Ingress ya da yük dengeleyici yalnızca uygulamanın web portunu dışarı açar;
+servisin dış adresinden (ör. `https://orders.example.com`) 29470'e ulaşılamaz. Bu yüzden ConnectivityProbe uygulamanın
+**hangi adreslerle çağrıldığını** da kendiliğinden öğrenir: ASP.NET Core'da çatının her isteğin başında yayınladığı olayı
+dinler ve isteğin sunucu adını okur (isteğe dokunulmaz; IP adresleri ve localhost alınmaz, en fazla 20 ad). Pod'lar bu adları
+Monitor'e bildirir; Monitor de başka uygulamaların bağlantı adresleriyle eşleştirir: `orders.example.com` yalnızca *Orders
+API* için çağrılıyorsa o adrese giden her bağlantının hedef uygulaması kesin olarak *Orders API* olur ve sağlığı Orders API'nin
+pod'larından gösterilir. Uygulamada hiçbir şey eklenmez ya da ayarlanmaz. Aynı ad birden fazla uygulama için çağrılıyorsa (ör.
+yola göre yönlendiren bir ingress) hedef işaretlenmez. Kapatmak için `o.ReportServedHosts = false`. Worker, konsol ve klasik
+ASP.NET uygulamaları adres bildirmez.
+
 **Bağlantı grupları.** Anahtar kelimeleriyle grup verin; Monitor adında ya da adresinde kelimelerden biri geçen bağlantıları
 uygulamanın detay sayfasında o grubun altında toplar:
 
@@ -467,6 +477,7 @@ ConnectivityProbeAgent.Start(url, key, "Orders API", o =>
 | `SettingsUrl` / `SettingsJson` / `Settings` | — | Uygulamanın ayarları: içindeki bağımlılıklar Monitor'de kendiliğinden tanımlanır (bkz. [Ayarlardaki bağımlılıklar](#ayarlardaki-bağımlılıklar-22)). |
 | `SettingsRefreshMinutes` | 10 | Ayarların yeniden okunma aralığı (dk). |
 | `HealthEnabled` / `HealthPort` | true / 29470 | Ayrı portta ConnectivityProbe health ucu (bkz. [Health ucu](#health-ucu-ve-bağlantı-grupları-23)). |
+| `ReportServedHosts` | true | Uygulamanın çağrıldığı sunucu adları bildirilir (ASP.NET Core); Monitor başka uygulamaların bağlantılarının hedefini bunlardan kesin olarak bulur (bkz. [Ingress arkasındaki servisler](#health-ucu-ve-bağlantı-grupları-23)). |
 | `AddGroup(ad, kelimeler…)` | — | Bağlantıları Monitor'de anahtar kelimeye göre gruplar. |
 
 `ConnectivityProbeAgent.Current` çalışan agent'ı döner (süreç başına bir tane); `LastContactUtc`, `LastRunUtc`,
@@ -523,7 +534,8 @@ Adımlar:
 
 | Sürüm | Öne çıkanlar |
 |---|---|
-| **2.3.0** | Her tür uygulamada ayrı portta health ucu (`http://<pod-ip>:29470/connectivityprobe/health`), ConnectivityProbe imzasıyla; Monitor pod sağlığını ve servislerin ConnectivityProbe kullanıp kullanmadığını sorgular. Bağlantı grupları (`o.AddGroup`). |
+| **2.4.0** | Ingress arkasındaki servisler kesin olarak tanınır: pod'lar uygulamanın çağrıldığı sunucu adlarını bildirir (ASP.NET Core, yalnızca okunur, ayar gerekmez), Monitor bunları başka uygulamaların bağlantı adresleriyle eşleştirir (`ReportServedHosts`). |
+| 2.3.0 | Her tür uygulamada ayrı portta health ucu (`http://<pod-ip>:29470/connectivityprobe/health`), ConnectivityProbe imzasıyla; Monitor pod sağlığını ve servislerin ConnectivityProbe kullanıp kullanmadığını sorgular. Bağlantı grupları (`o.AddGroup`). |
 | 2.2.0 | Ayarlardaki bağımlılıklar: `SettingsUrl` / `SettingsJson` / `Settings` verilirse içindeki veritabanları, kuyruklar ve servisler Monitor'de kendiliğinden tanımlanır (pod'dan yalnızca tür, sunucu ve port çıkar); değişiklik takibi ve isteğe bağlı protokol doğrulaması (RabbitMQ, Kafka, MongoDB, Redis, PostgreSQL, SQL Server, Kibana, Elasticsearch...). Monitor: isteğe bağlı MongoDB depolama. |
 | 2.1.0 | Pod kaynakları (CPU, bellek ve limitler, throttling, OOM, thread'ler, TCP soketleri), TLS / sertifika kontrolü, DNS süresi, yavaşlama ve yeniden başlama tespiti. Pod'lar kendi IP adresini bildirir (`POD_IP` veya Monitor'e giden yol); Monitor cluster'ları pod ağıyla adlandırır (ör. `10.42.0.0/16`). Monitor: sürümler ve ağ gruplaması detay penceresinde, Türkçe / İngilizce arayüz. |
 | 2.0.0 | Tek satır: `ConnectivityProbeAgent.Start(monitorUrl, appKey, appName)`. Kendiliğinden kayıt, pod başına uygulama sürümü / build'i, otomatik cluster gruplama, uç yok, bağımlılık yok. |

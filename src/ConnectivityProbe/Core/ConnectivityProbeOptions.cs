@@ -71,6 +71,13 @@ namespace ConnectivityProbe
         public int HealthPort { get; set; } = 29470;
 
         /// <summary>
+        /// Uygulamanın çağrıldığı adresler (ASP.NET Core'da gelen isteklerin Host değeri, ör. orders.example.com) Monitor'e
+        /// bildirilsin mi. Monitor bunları başka uygulamaların bağlantı adresleriyle eşleştirip hedef uygulamayı kesin olarak bulur
+        /// (servis ingress arkasında olsa da). İstekler yalnızca okunur, değiştirilmez. Varsayılan: açık.
+        /// </summary>
+        public bool ReportServedHosts { get; set; } = true;
+
+        /// <summary>
         /// Monitor'de bağlantıların gruplanması: adresinde (host / URL) veya adında anahtar kelimelerden biri geçen bağlantılar
         /// uygulamanın detayında o grubun altında gösterilir. Örnek: <c>o.AddGroup("Ödeme servisleri", "pay", "billing")</c>.
         /// </summary>

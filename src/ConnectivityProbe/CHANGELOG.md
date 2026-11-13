@@ -1,5 +1,32 @@
 # Changelog / Değişiklik geçmişi
 
+## 2.4.0
+
+### English
+
+**Services behind an ingress are identified for sure.**
+
+- The pods report the host names the application is called at (`AgentReport.ServedHosts`). In ASP.NET Core the library
+  listens to the framework's begin-request diagnostic event and reads the request's host name; the request is not touched,
+  nothing has to be added or configured. IP addresses and localhost are skipped, at most 20 names. Worker, console and
+  classic ASP.NET applications report nothing.
+- The Monitor matches these names with other applications' connection addresses and sets the connection's target
+  application, so services behind an ingress (where 29470 is not reachable) are identified without guessing. A name called
+  for more than one application sets no target.
+- Option `ReportServedHosts` (default `true`).
+
+### Türkçe
+
+**Ingress arkasındaki servisler kesin olarak tanınır.**
+
+- Pod'lar uygulamanın çağrıldığı sunucu adlarını bildirir (`AgentReport.ServedHosts`). ASP.NET Core'da kütüphane çatının
+  istek başı tanılama olayını dinler ve isteğin sunucu adını okur; isteğe dokunulmaz, hiçbir şey eklenmez ya da ayarlanmaz.
+  IP adresleri ve localhost alınmaz, en fazla 20 ad. Worker, konsol ve klasik ASP.NET uygulamaları bildirmez.
+- Monitor bu adları başka uygulamaların bağlantı adresleriyle eşleştirip bağlantının hedef uygulamasını işaretler; böylece
+  ingress arkasındaki (29470'e ulaşılamayan) servisler tahminsiz tanınır. Birden fazla uygulama için çağrılan ad hedef
+  işaretlemez.
+- Ayar: `ReportServedHosts` (varsayılan `true`).
+
 ## 2.3.0
 
 ### English
